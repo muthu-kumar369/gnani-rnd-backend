@@ -5,9 +5,13 @@
   "main": "dist/app.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node dist/app.js",
-    "dev": "tsx src/app.ts",
-    "build": "tsc && copyfiles -u 1 \"src/**/*.proto\" dist && copyfiles -u 2 \"scripts/shell/*.py\" dist"
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "build": "tsc && copyfiles -u 1 \"src/**/*.proto\" dist && copyfiles -u 2 \"scripts/shell/*.py\" dist",
+    "start:dev": "bash scripts/start-dev.sh",
+    "migrate": "bash scripts/migrate.sh",
+    "build:script": "bash scripts/build.sh",
+    "deploy": "bash scripts/deploy.sh"
   },
   "keywords": [],
   "author": "",

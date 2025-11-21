@@ -1,0 +1,22 @@
+// audio.proto
+syntax = "proto3";
+
+package gnani;
+
+message AudioStreamChunk {
+  string sessionId = 1;
+  bytes audioChunk = 2;
+  int32 sampleRate = 3;
+  bool endOfStream = 4;
+}
+
+message TranscriptionResponse {
+  string sessionId = 1;
+  string transcription = 2;
+  string llmResponse = 3;
+  string actionDirective = 4;
+}
+
+service AudioService {
+  rpc SendAudio (stream AudioStreamChunk) returns (stream TranscriptionResponse);
+}

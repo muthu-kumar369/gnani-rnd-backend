@@ -1,0 +1,20 @@
+// assistant.proto
+syntax = "proto3";
+
+package gnani;
+
+message AssistantRequest {
+  string sessionId = 1;
+  string userId = 2;
+  string message = 3;
+}
+
+message AssistantResponse {
+  string sessionId = 1;
+  string responseText = 2;
+  string actionDirective = 3;
+}
+
+service AssistantService {
+  rpc SendMessage (AssistantRequest) returns (AssistantResponse);
+}
