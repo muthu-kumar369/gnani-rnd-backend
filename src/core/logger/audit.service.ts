@@ -1,6 +1,6 @@
 // src/services/auditService.ts
-import logger, { createContextualLogger } from '../utils/logger.js';
-import electronComm from './electronComm.js';
+import logger, { createContextualLogger } from './logger.js';
+import electronComm from '../../modules/electron/electron.service.js';
 
 class AuditService {
     logEvent(eventType: string, userId: string | null, sessionId: string | null = null, data: object = {}, status: 'success' | 'failure' | 'denied' | 'info' | 'warning' = 'info'): void {

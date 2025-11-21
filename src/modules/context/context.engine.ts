@@ -1,6 +1,6 @@
 // src/services/contextEngine.ts
-import logger from '../utils/logger.js';
-import contextBuilder from './contextBuilder.js';
+import logger from '../../core/logger/logger.js';
+import contextBuilder from './context.builder.js';
 
 class ContextEngine {
     constructor() {

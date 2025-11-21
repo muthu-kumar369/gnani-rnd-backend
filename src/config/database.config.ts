@@ -1,7 +1,7 @@
 // src/config/db.ts
 import mongoose from 'mongoose';
-import { createContextualLogger } from '../utils/logger.js'; // Import logger factory
-import { MONGODB_URI } from '../configs/config.js';
+import { createContextualLogger } from '../core/logger/logger.js'; // Import logger factory
+import { MONGODB_URI } from './env.config.js';
 
 const logger = createContextualLogger({ module: 'DB' }); // Create a logger instance for this module
 

@@ -2,10 +2,10 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { createContextualLogger } from '../utils/logger.js';
-import metrics from '../utils/metrics.js';
-import auditService from './auditService.js';
-import { WHISPER_MODEL_PATH, WHISPER_LANGUAGE, WHISPER_SAMPLE_RATE, WHISPER_COMPUTE_TYPE, WHISPER_PYTHON_PATH } from '../configs/config.js';
+import { createContextualLogger } from '../../core/logger/logger.js';
+import metrics from '../../core/monitoring/metrics.js';
+import auditService from '../../core/logger/audit.service.js';
+import { WHISPER_MODEL_PATH, WHISPER_LANGUAGE, WHISPER_SAMPLE_RATE, WHISPER_COMPUTE_TYPE, WHISPER_PYTHON_PATH } from '../../config/env.config.js';
 import { Logger } from 'winston';
 import { fileURLToPath } from 'url';
 

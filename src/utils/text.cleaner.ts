@@ -1,5 +1,5 @@
 // src/utils/textCleaner.ts
-import logger from './logger.js';
+import logger from '../core/logger/logger.js';
 
 class TextCleaner {
     constructor() {

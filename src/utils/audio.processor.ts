@@ -1,6 +1,6 @@
 // src/utils/audioProcessor.ts
-import { WHISPER_SAMPLE_RATE } from '../configs/config.js';
-import logger from './logger.js';
+import { WHISPER_SAMPLE_RATE } from '../config/env.config.js';
+import logger from '../core/logger/logger.js';
 
 class AudioProcessor {
     constructor() {

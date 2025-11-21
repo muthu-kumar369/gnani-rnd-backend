@@ -13,7 +13,7 @@ class UserSocket {
     private handleConnection = (socket: Socket) => {
         console.log(`User socket connected: ${socket.id}`);
 
-        socket.on('userEvent', (data) => {
+        socket.on('userEvent', (data: any) => {
             console.log(`User event from ${socket.id}:`, data);
             // Process user event
             socket.emit('serverNotification', { message: `Received user event: ${data.type}` });

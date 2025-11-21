@@ -13,7 +13,7 @@ class AssistantSocket {
     private handleConnection = (socket: Socket) => {
         console.log(`Assistant socket connected: ${socket.id}`);
 
-        socket.on('assistantRequest', (data) => {
+        socket.on('assistantRequest', (data: any) => {
             console.log(`Assistant request from ${socket.id}:`, data);
             // Process request and send response
             socket.emit('assistantResponse', { message: `Echo: ${data.message}` });

@@ -1,17 +1,17 @@
 // src/services/sessionManager.ts
 import { v4 as uuidv4 } from 'uuid';
-import { createContextualLogger } from '../utils/logger.js';
-import metrics from '../utils/metrics.js';
-import auditService from './auditService.js';
-import whisperService from './whisperService.js';
-import audioProcessor from '../utils/audioProcessor.js';
-import queryProcessor from './queryProcessor.js';
-import contextEngine from './contextEngine.js';
-import actionDispatcher from './actionDispatcher.js';
-import llmService from './llmService.js';
-import llmResponseParser from '../utils/llmResponseParser.js';
-import ttsService from './ttsService.js';
-import audioStreamer from '../utils/audioStreamer.js';
+import { createContextualLogger } from '../../core/logger/logger.js';
+import metrics from '../../core/monitoring/metrics.js';
+import auditService from '../../core/logger/audit.service.js';
+import whisperService from '../asr/whisper.service.js';
+import audioProcessor from '../../utils/audio.processor.js';
+import queryProcessor from '../query/query.processor.js';
+import contextEngine from '../context/context.engine.js';
+import actionDispatcher from '../action/action-dispatcher.service.js';
+import llmService from '../llm/llm.service.js';
+import llmResponseParser from '../llm/llm-response.parser.js';
+import ttsService from '../tts/tts.service.js';
+import audioStreamer from '../../utils/audio.streamer.js';
 import { Logger } from 'winston';
 
 interface Session {

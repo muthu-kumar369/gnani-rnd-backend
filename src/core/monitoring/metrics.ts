@@ -1,6 +1,6 @@
 // src/utils/metrics.ts
 import client from 'prom-client';
-import logger from './logger.js';
+import logger from '../logger/logger.js';
 
 class Metrics {
     public registry: client.Registry;

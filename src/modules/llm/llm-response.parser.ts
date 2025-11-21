@@ -1,5 +1,5 @@
 // src/utils/llmResponseParser.ts
-import logger from './logger.js';
+import logger from '../../core/logger/logger.js';
 
 interface LlmRawResponse {
     text?: string;

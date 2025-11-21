@@ -1,8 +1,8 @@
 // src/services/contextBuilder.ts
-import logger from '../utils/logger.js';
-import settingsManager from './settingsManager.js';
-import vectorManager from './vectorManager.js';
-import queryProcessor from './queryProcessor.js';
+import logger from '../../core/logger/logger.js';
+import settingsManager from '../user/settings.manager.js';
+import vectorManager from '../vector/vector.manager.js';
+import queryProcessor from '../query/query.processor.js';
 
 class ContextBuilder {
     constructor() {

@@ -1,8 +1,8 @@
 // src/services/llmService.ts
 import axios from 'axios';
-import { createContextualLogger } from '../utils/logger.js';
-import metrics from '../utils/metrics.js';
-import auditService from './auditService.js';
+import { createContextualLogger } from '../../core/logger/logger.js';
+import metrics from '../../core/monitoring/metrics.js';
+import auditService from '../../core/logger/audit.service.js';
 import {
     LLM_SERVER_URL,
     LLM_MODEL_PATH,
@@ -10,7 +10,7 @@ import {
     LLM_MAX_TOKENS,
     LLM_TEMPERATURE,
     LLM_STREAMING_ENABLED
-} from '../configs/config.js';
+} from '../../config/env.config.js';
 import { Logger } from 'winston';
 
 class LlmService {

@@ -1,5 +1,5 @@
 // backend/src/services/action_service.ts
-import logger from '../utils/logger.js';
+import logger from '../../core/logger/logger.js';
 import { Logger } from 'winston';
 
 class ActionService {

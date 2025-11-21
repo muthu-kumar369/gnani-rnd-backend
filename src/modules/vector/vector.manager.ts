@@ -1,6 +1,6 @@
 // src/services/vectorManager.ts
 import { ChromaClient, Collection } from 'chromadb';
-import logger from '../utils/logger.js';
+import logger from '../../core/logger/logger.js';
 // Removed unused imports from config, assuming ChromaDB connection details are directly passed or handled internally
 // const { VECTOR_DB_HOST, VECTOR_DB_PORT, COLLECTION_NAME, API_KEY } = require('../configs/config');
 

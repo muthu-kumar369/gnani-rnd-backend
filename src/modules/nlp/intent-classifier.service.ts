@@ -1,5 +1,5 @@
 // src/services/intentClassifier.ts
-import logger from '../utils/logger.js';
+import logger from '../../core/logger/logger.js';
 
 class IntentClassifier {
     private keywords: { [key: string]: string[] };

@@ -1,5 +1,5 @@
 // src/utils/permissionsChecker.ts
-import logger from './logger.js';
+import logger from '../logger/logger.js';
 
 class PermissionsChecker {
     private rolePermissions: { [key: string]: string[] };

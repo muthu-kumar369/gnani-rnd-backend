@@ -1,5 +1,5 @@
 // src/core/security/jwt.utils.ts
-import jwt from 'jsonwebtoken';
+import jwt, { SignOptions } from 'jsonwebtoken';
 
 // Placeholder for JWT utility functions
 class JwtUtils {
@@ -10,7 +10,8 @@ class JwtUtils {
     }
 
     generateToken(payload: object, expiresIn: string = '1h'): string {
-        return jwt.sign(payload, this.secret, { expiresIn });
+        const options: SignOptions = { expiresIn: expiresIn as any };
+        return jwt.sign(payload, this.secret, options);
     }
 
     verifyToken(token: string): any {

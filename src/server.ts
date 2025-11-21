@@ -2,10 +2,10 @@
 import express, { Application, Request, Response } from 'express';
 import bodyParser from 'body-parser';
 import morgan from 'morgan';
-import { PORT } from '../configs/config.js'; // Use PORT from config
-import logger from '../utils/logger.js'; // Updated path for logger
-import apiRoutes from '../routes/index.js'; // Import consolidated routes from src/routes/index.js
-import errorHandler from '../utils/error_handler.js';
+import { PORT } from './config/env.config.js'; // Use PORT from config
+import logger from './core/logger/logger.js'; // Updated path for logger
+import apiRoutes from './routes/index.js'; // Import consolidated routes from src/routes/index.js
+import errorHandler from './core/http/error.middleware.js';
 
 const app: Application = express();
 

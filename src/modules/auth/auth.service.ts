@@ -2,10 +2,10 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
-import User, { IUser } from '../models/User.js';
-import { createContextualLogger } from '../utils/logger.js';
-import auditService from './auditService.js';
-import { JWT_SECRET } from '../configs/config.js';
+import User, { IUser } from '../../modules/user/user.entity.js';
+import { createContextualLogger } from '../../core/logger/logger.js';
+import auditService from '../../core/logger/audit.service.js';
+import { JWT_SECRET } from '../../config/env.config.js';
 import { Logger } from 'winston';
 
 class AuthService {

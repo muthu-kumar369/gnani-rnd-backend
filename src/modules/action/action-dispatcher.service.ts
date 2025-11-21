@@ -1,11 +1,11 @@
 // src/services/actionDispatcher.ts
-import { createContextualLogger } from '../utils/logger.js';
-import metrics from '../utils/metrics.js';
-import auditService from './auditService.js';
-import permissionsChecker from '../utils/permissionsChecker.js';
-import User from '../models/User.js';
-import systemExecutor from './systemExecutor.js';
-import electronComm from './electronComm.js';
+import { createContextualLogger } from '../../core/logger/logger.js';
+import metrics from '../../core/monitoring/metrics.js';
+import auditService from '../../core/logger/audit.service.js';
+import permissionsChecker from '../../core/security/permissions.checker.js';
+import User from '../../modules/user/user.entity.js';
+import systemExecutor from '../system/system.executor.js';
+import electronComm from '../electron/electron.service.js';
 import { Logger } from 'winston';
 
 interface ActionObject {

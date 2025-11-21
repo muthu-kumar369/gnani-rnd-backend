@@ -4,7 +4,7 @@ import {
   LOG_LEVEL,
   LOG_FILE_ERROR,
   LOG_FILE_COMBINED,
-} from "../configs/config.js";
+} from "../../config/env.config.js";
 
 const createBaseLogger = (defaultMeta: object = {}): Logger => {
   const transports = [

@@ -1,8 +1,8 @@
 // backend/src/app.ts
-import { startExpressServer } from './server/express_server.js';
-import { startGrpcServer } from './server/grpc_server.js';
-import connectDB from './config/db.js';
-import logger from './utils/logger.js'; // Updated path
+import { startExpressServer } from './server.js';
+import { startGrpcServer } from './grpc.js';
+import connectDB from './config/database.config.js';
+import logger from './core/logger/logger.js';
 
 // Connect to MongoDB
 connectDB();

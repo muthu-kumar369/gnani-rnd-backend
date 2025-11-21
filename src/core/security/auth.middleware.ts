@@ -1,9 +1,9 @@
 // src/middlewares/authMiddleware.ts
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { JWT_SECRET } from '../configs/config.js';
-import logger from '../utils/logger.js';
-import User from '../models/User.js';
+import { JWT_SECRET } from '../../config/env.config.js';
+import logger from '../../core/logger/logger.js';
+import User from '../../modules/user/user.entity.js';
 
 interface DecodedToken {
     user: {

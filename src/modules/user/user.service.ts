@@ -1,7 +1,7 @@
 // src/services/userService.ts
-import User, { IUser, IDevice } from '../models/User.js';
-import { createContextualLogger } from '../utils/logger.js';
-import auditService from './auditService.js';
+import User, { IUser, IDevice } from './user.entity.js';
+import { createContextualLogger } from '../../core/logger/logger.js';
+import auditService from '../../core/logger/audit.service.js';
 import { Logger } from 'winston';
 
 export class UserService {

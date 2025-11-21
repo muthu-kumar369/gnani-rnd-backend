@@ -1,9 +1,9 @@
 // src/routes/index.ts
 import express from 'express';
-import authRoutes from './authRoutes.js';
-import userRoutes from './userRoutes.js';
-import statusRoutes from './statusRoutes.js';
-import adminRoutes from './adminRoutes.js';
+import authRoutes from '../modules/auth/auth.routes.js';
+import userRoutes from '../modules/user/user.routes.js';
+import statusRoutes from './health.routes.js';
+import adminRoutes from '../modules/admin/admin.routes.js';
 
 const router = express.Router();
 

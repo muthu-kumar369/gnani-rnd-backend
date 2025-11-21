@@ -1,6 +1,6 @@
 // src/routes/adminRoutes.ts
 import express, { Request, Response } from 'express';
-import { authMiddleware, authorizeRoles } from '../middlewares/authMiddleware.js';
+import { authMiddleware, authorizeRoles } from '../../core/security/auth.middleware.js';
 
 const router = express.Router();
 

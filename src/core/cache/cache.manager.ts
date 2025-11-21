@@ -1,6 +1,6 @@
 // src/services/cacheManager.ts
 import NodeCache from 'node-cache';
-import logger from '../utils/logger.js';
+import logger from '../../core/logger/logger.js';
 
 class CacheManager {
     private cache: NodeCache;

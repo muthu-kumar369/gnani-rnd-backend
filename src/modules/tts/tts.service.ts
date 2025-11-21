@@ -1,9 +1,9 @@
 // src/services/ttsService.ts
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import path from 'path';
-import { createContextualLogger } from '../utils/logger.js';
-import metrics from '../utils/metrics.js';
-import auditService from './auditService.js';
+import { createContextualLogger } from '../../core/logger/logger.js';
+import metrics from '../../core/monitoring/metrics.js';
+import auditService from '../../core/logger/audit.service.js';
 import {
     TTS_PYTHON_PATH,
     TTS_ENGINE,
@@ -11,7 +11,7 @@ import {
     TTS_LANGUAGE,
     TTS_SAMPLE_RATE,
     TTS_STREAM_CHUNK_SIZE
-} from '../configs/config.js';
+} from '../../config/env.config.js';
 import { Logger } from 'winston';
 import { fileURLToPath } from 'url';
 

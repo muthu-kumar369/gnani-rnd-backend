@@ -1,6 +1,6 @@
 // backend/src/utils/error_handler.ts
 import { Request, Response, NextFunction } from 'express';
-import logger from './logger.js';
+import logger from '../logger/logger.js';
 
 interface AppError extends Error {
     statusCode?: number;

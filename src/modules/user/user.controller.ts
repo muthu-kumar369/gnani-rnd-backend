@@ -1,9 +1,9 @@
 // src/controllers/userController.ts
 import { Request, Response, NextFunction } from 'express';
-import { UserService } from '../services/userService.js';
-import { createContextualLogger } from '../utils/logger.js'; // Import logger factory
-import auditService from '../services/auditService.js'; // Import audit service
-import errorHandler from '../utils/error_handler.js';
+import { UserService } from './user.service.js';
+import { createContextualLogger } from '../../core/logger/logger.js'; // Import logger factory
+import auditService from '../../core/logger/audit.service.js'; // Import audit service
+import errorHandler from '../../core/http/error.middleware.js';
 import { Logger } from 'winston';
 
 // Add a custom property to the Request object

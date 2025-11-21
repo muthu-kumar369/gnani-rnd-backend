@@ -1,6 +1,6 @@
 // src/routes/statusRoutes.ts
 import express, { Request, Response } from 'express';
-import logger from '../utils/logger.js';
+import logger from '../core/logger/logger.js';
 
 const router = express.Router();
 

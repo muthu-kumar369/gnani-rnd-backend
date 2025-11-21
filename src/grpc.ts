@@ -1,9 +1,9 @@
 // backend/src/server/grpc_server.ts
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
-import { GRPC_PORT } from '../configs/config.js';
-import logger from '../utils/logger.js';
-import sessionManager from '../services/sessionManager.js';
+import { GRPC_PORT } from './config/env.config.js';
+import logger from './core/logger/logger.js';
+import sessionManager from './modules/session/session.manager.js';
 import { fileURLToPath } from 'url';
 import path from 'path';
 

@@ -1,9 +1,9 @@
 // src/controllers/authController.ts
 import { Request, Response, NextFunction } from 'express';
-import authService from '../services/authService.js';
-import { createContextualLogger } from '../utils/logger.js'; // Import logger factory
-import auditService from '../services/auditService.js'; // Import audit service
-import errorHandler from '../utils/error_handler.js';
+import authService from './auth.service.js';
+import { createContextualLogger } from '../../core/logger/logger.js'; // Import logger factory
+import auditService from '../../core/logger/audit.service.js'; // Import audit service
+import errorHandler from '../../core/http/error.middleware.js';
 import { Logger } from 'winston';
 
 class AuthController {

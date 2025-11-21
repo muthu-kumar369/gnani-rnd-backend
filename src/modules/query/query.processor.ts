@@ -1,10 +1,10 @@
 // src/services/queryProcessor.ts
-import textCleaner from '../utils/textCleaner.js';
-import intentClassifier from './intentClassifier.js';
-import cacheManager from './cacheManager.js';
-import { createContextualLogger } from '../utils/logger.js';
-import metrics from '../utils/metrics.js';
-import auditService from './auditService.js';
+import textCleaner from '../../utils/text.cleaner.js';
+import intentClassifier from '../nlp/intent-classifier.service.js';
+import cacheManager from '../../core/cache/cache.manager.js';
+import { createContextualLogger } from '../../core/logger/logger.js';
+import metrics from '../../core/monitoring/metrics.js';
+import auditService from '../../core/logger/audit.service.js';
 import { Logger } from 'winston';
 
 interface Interaction {

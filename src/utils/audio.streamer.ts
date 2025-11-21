@@ -1,6 +1,6 @@
 // src/utils/audioStreamer.ts
-import logger from './logger.js';
-import electronComm from '../services/electronComm.js';
+import logger from '../core/logger/logger.js';
+import electronComm from '../modules/electron/electron.service.js';
 
 interface AudioQueueItem {
     chunk: Buffer;

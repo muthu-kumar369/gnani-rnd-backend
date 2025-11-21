@@ -1,7 +1,7 @@
 // src/services/settingsManager.ts
 import NodeCache from 'node-cache';
-import logger from '../utils/logger.js';
-import User, { IUser } from '../models/User.js';
+import logger from '../../core/logger/logger.js';
+import User, { IUser } from './user.entity.js';
 
 class SettingsManager {
     private cache: NodeCache;

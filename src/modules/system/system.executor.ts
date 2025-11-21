@@ -1,5 +1,5 @@
 // src/services/systemExecutor.ts
-import logger from '../utils/logger.js';
+import logger from '../../core/logger/logger.js';
 
 class SystemExecutor {
     constructor() {
