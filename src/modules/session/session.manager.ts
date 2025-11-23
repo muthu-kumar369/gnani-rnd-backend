@@ -40,6 +40,7 @@ class SessionManager {
 
     startSession(userId: string, onTranscriptionCallback: (transcript: string, isFinal: boolean) => void): string {
         const sessionId = uuidv4();
+        this.logger.debug(`Generated new session ID: ${sessionId}`);
         this.sessions.set(sessionId, {
             userId,
             audioBuffer: [],
@@ -70,11 +71,9 @@ class SessionManager {
             session.lastActivity = Date.now();
             this.resetSessionTimeout(sessionId);
 
-            const processedAudio = audioProcessor.processAudioForWhisper(audioChunk, inputSampleRate);
+            session.audioBuffer.push(audioChunk); // Directly push the audioChunk
 
-            session.audioBuffer.push(processedAudio);
-
-            whisperService.sendAudioChunk(sessionId, processedAudio, (transcript: string, isFinal: boolean) => {
+            whisperService.sendAudioChunk(sessionId, audioChunk, (transcript: string, isFinal: boolean) => {
                 session.currentTranscription = transcript;
                 if (session.onTranscriptionCallback) {
                     session.onTranscriptionCallback(transcript, isFinal);

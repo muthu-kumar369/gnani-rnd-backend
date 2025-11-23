@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: gnani-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-password}
+    restart: always
+
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: gnani-chromadb
+    ports:
+      - "8000:8000"
+    volumes:
+      - chromadb_data:/app/chroma
+    environment:
+      # These are default environment variables for ChromaDB
+      # CHROMA_SERVER_HOST: "0.0.0.0"
+      # CHROMA_SERVER_HTTP_PORT: "8000"
+      # CHROMA_SERVER_NO_COPY_DB: "true" # Use persistent storage
+      ALLOW_RESET: "true" # Allows resetting the ChromaDB instance for development
+    restart: always
+
+volumes:
+  mongodb_data:
+  chromadb_data:

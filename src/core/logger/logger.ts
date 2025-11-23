@@ -41,6 +41,6 @@ const createBaseLogger = (defaultMeta: object = {}): Logger => {
 const logger: Logger = createBaseLogger();
 
 export const createContextualLogger = (context: object): Logger =>
-  createBaseLogger(context);
+  createBaseLogger({ context });
 
 export default logger;

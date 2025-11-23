@@ -37,7 +37,7 @@ class TtsService {
             scriptPath,
             '--engine', TTS_ENGINE,
             '--voice', TTS_VOICE,
-            '--language', TTS_LANGUAGE,
+            // Removed --language as the model might not be multi-lingual
             '--sample_rate', TTS_SAMPLE_RATE.toString(),
             '--chunk_size', TTS_STREAM_CHUNK_SIZE.toString(),
         ];

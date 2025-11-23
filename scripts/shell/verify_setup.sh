@@ -20,10 +20,10 @@ EXIT_CODE=0
 
 # --- 1. Verify MongoDB Connection ---
 echo "--- Verifying MongoDB Connection ---"
-if systemctl is-active --quiet mongod; then
-    echo "MongoDB service is running."
+if docker ps --filter "name=gnani-mongodb" --format "{{.Names}}" | grep -q "gnani-mongodb"; then
+    echo "MongoDB Docker container is running."
     # Try connecting with mongosh shell
-    mongosh --eval 'db.adminCommand("ping")' > /dev/null 2>&1
+    docker exec gnani-mongodb mongosh --eval 'db.adminCommand("ping")' > /dev/null 2>&1
     report_status "MongoDB connection (ping)"
 else
     echo "MongoDB service is not running."
@@ -49,6 +49,9 @@ if [ -d "$VENV_DIR" ]; then
     echo "Python virtual environment found. Activating..."
     source "$VENV_DIR/bin/activate"
     report_status "Python virtual environment activation"
+
+    # Install TTS package if not already installed
+    python -c "import TTS" > /dev/null 2>&1 || pip install TTS
 
     # Check for whisper and TTS imports
     python -c "import whisper" > /dev/null 2>&1

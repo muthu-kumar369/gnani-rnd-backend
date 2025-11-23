@@ -1,18 +1,12 @@
 // src/controllers/authController.ts
 import { Request, Response, NextFunction } from 'express';
 import authService from './auth.service.js';
-import { createContextualLogger } from '../../core/logger/logger.js'; // Import logger factory
-import auditService from '../../core/logger/audit.service.js'; // Import audit service
-import errorHandler from '../../core/http/error.middleware.js';
-import { Logger } from 'winston';
+import { createContextualLogger } from '../../core/logger/logger.js';
+import auditService from '../../core/logger/audit.service.js';
 
-class AuthController {
-    private logger: Logger;
+const logger = createContextualLogger({ module: 'AuthController' });
 
-    constructor() {
-        this.logger = createContextualLogger({ module: 'AuthController' }); // Create a logger instance
-    }
-
+export default {
     async register(req: Request, res: Response, next: NextFunction): Promise<void> {
         const { username, email, password } = req.body;
         try {
@@ -20,11 +14,11 @@ class AuthController {
             auditService.logAuthEvent(user.userId, 'REGISTER', 'success', { username, email });
             res.status(201).json({ message: 'User registered successfully', userId: user.userId });
         } catch (error: any) {
-            this.logger.error(`Registration error for ${username || email}: ${error.message}`);
+            logger.error(`Registration error for ${username || email}: ${error.message}`);
             auditService.logAuthEvent(null, 'REGISTER', 'failure', { username, email, error: error.message });
-            next(error); // Pass error to centralized error handler
+            next(error);
         }
-    }
+    },
 
     async login(req: Request, res: Response, next: NextFunction): Promise<void> {
         const { loginIdentifier, password } = req.body;
@@ -33,11 +27,9 @@ class AuthController {
             auditService.logAuthEvent(user.userId, 'LOGIN', 'success', { loginIdentifier });
             res.status(200).json({ message: 'Login successful', token, user });
         } catch (error: any) {
-            this.logger.error(`Login error for ${loginIdentifier}: ${error.message}`);
+            logger.error(`Login error for ${loginIdentifier}: ${error.message}`);
             auditService.logAuthEvent(null, 'LOGIN', 'failure', { loginIdentifier, error: error.message });
-            next(error); // Pass error to centralized error handler
+            next(error);
         }
     }
-}
-
-export default new AuthController();
+};

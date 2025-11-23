@@ -11,16 +11,16 @@ echo " Starting Comprehensive GNANI Backend Setup "
 echo "=========================================="
 
 # Ensure scripts are executable
-chmod +x setup_system_packages.sh
-chmod +x setup_python.sh
-chmod +x setup_node.sh
-chmod +x setup_db.sh
-chmod +x verify_setup.sh
+chmod +x scripts/shell/setup_system_packages.sh
+chmod +x scripts/shell/setup_python.sh
+chmod +x scripts/shell/setup_node.sh
+chmod +x scripts/shell/setup_db.sh
+chmod +x scripts/shell/verify_setup.sh
 
 # --- 1. Install System Packages ---
 echo ""
 echo "--- Step 1/5: Installing System Packages (Node.js, Python, MongoDB, ChromaDB) ---"
-./setup_system_packages.sh
+scripts/shell/setup_system_packages.sh
 if [ $? -ne 0 ]; then
     echo "Error: System package setup failed. Exiting."
     exit 1
@@ -29,7 +29,7 @@ fi
 # --- 2. Setup Python Environment ---
 echo ""
 echo "--- Step 2/5: Setting up Python Environment (Virtualenv, Whisper, TTS) ---"
-./setup_python.sh
+scripts/shell/setup_python.sh
 if [ $? -ne 0 ]; then
     echo "Error: Python environment setup failed. Exiting."
     exit 1
@@ -38,7 +38,7 @@ fi
 # --- 3. Setup Node.js Environment ---
 echo ""
 echo "--- Step 3/5: Setting up Node.js Environment (Project Init, NPM Packages, Folder Structure) ---"
-./setup_node.sh
+scripts/shell/setup_node.sh
 if [ $? -ne 0 ]; then
     echo "Error: Node.js environment setup failed. Exiting."
     exit 1
@@ -46,8 +46,8 @@ fi
 
 # --- 4. Setup Databases (MongoDB, ChromaDB) ---
 echo ""
-echo "--- Step 4/5: Setting up Databases (MongoDB Service, ChromaDB Collection) ---"
-./setup_db.sh
+echo "--- Step 4/5: Setting up Databases (MongoDB, ChromaDB) ---"
+scripts/shell/setup_db.sh
 if [ $? -ne 0 ]; then
     echo "Error: Database setup failed. Exiting."
     exit 1
@@ -56,7 +56,7 @@ fi
 # --- 5. Verify Setup ---
 echo ""
 echo "--- Step 5/5: Verifying GNANI Backend Setup ---"
-./verify_setup.sh
+scripts/shell/verify_setup.sh
 if [ $? -ne 0 ]; then
     echo "Verification completed with failures. Please review the logs above."
     exit 1

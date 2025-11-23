@@ -134,7 +134,7 @@ const userSchema = new Schema({
     roles: [{ type: String, enum: ['owner', 'admin', 'user', 'guest'], default: ['user'] }],
     permissions: [{ type: String }], // List of allowed system actions
     settings: { type: settingsSchema, default: {} },
-    devices: [deviceSchema],
+    devices: { type: [deviceSchema], default: [] },
     history: [historyItemSchema],
     profile: { type: profileSchema, default: {} },
     preferences: { type: Schema.Types.Mixed, default: {} }, // Flexible JSON

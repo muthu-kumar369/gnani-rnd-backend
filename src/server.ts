@@ -1,4 +1,5 @@
 // backend/src/server/express_server.ts
+import http from 'http';
 import express, { Application, Request, Response } from 'express';
 import bodyParser from 'body-parser';
 import morgan from 'morgan';
@@ -24,10 +25,11 @@ app.get('/', (req: Request, res: Response) => {
 // Error handling middleware
 app.use(errorHandler);
 
-export const startExpressServer = (): void => {
-    app.listen(PORT, () => {
+export const startExpressServer = (): http.Server => {
+    const server = app.listen(PORT, () => {
         logger.info(`Express.js server listening on port ${PORT}`);
     });
+    return server;
 };
 
 export { app };

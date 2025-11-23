@@ -10,9 +10,10 @@ class AudioProcessor {
     processAudioForWhisper(audioBuffer: Buffer, inputSampleRate = 16000): Buffer {
         if (inputSampleRate !== WHISPER_SAMPLE_RATE) {
             logger.warn(`Audio sample rate mismatch. Input: ${inputSampleRate}Hz, Expected: ${WHISPER_SAMPLE_RATE}Hz. Resampling might be needed.`);
+            // TODO: Implement actual resampling here if necessary. For now, proceeding with input sample rate.
         }
 
-        logger.debug(`Audio processed for Whisper. Original size: ${audioBuffer.length}`);
+        logger.debug(`Audio processed for Whisper. Original size: ${audioBuffer.length} bytes. First 10 bytes: ${audioBuffer.slice(0, 10).toString('hex')}`);
         return audioBuffer;
     }
 

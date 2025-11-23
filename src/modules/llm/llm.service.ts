@@ -38,9 +38,12 @@ class LlmService {
                 headers['Authorization'] = `Bearer ${LLM_API_KEY}`;
             }
 
+            const formattedPrompt = this._formatPromptForLLM(structuredPrompt);
+            this.logger.debug(`Crafted prompt for LLM: ${JSON.stringify(formattedPrompt)}`);
+
             const requestBody = {
                 model: LLM_MODEL_PATH,
-                prompt: this._formatPromptForLLM(structuredPrompt),
+                prompt: formattedPrompt,
                 max_tokens: LLM_MAX_TOKENS,
                 temperature: LLM_TEMPERATURE,
                 stream: LLM_STREAMING_ENABLED,
@@ -50,12 +53,18 @@ class LlmService {
             let action = null;
 
             if (LLM_STREAMING_ENABLED && onPartialResponse) {
-                const response = await axios.post(this.llmApiUrl + '/stream', requestBody, { headers, responseType: 'stream' });
+                const response = await axios.post(this.llmApiUrl + '/api/generate', requestBody, { headers, responseType: 'stream' });
                 await new Promise<void>((resolve, reject) => {
                     response.data.on('data', (chunk: any) => {
-                        const partialData = chunk.toString();
-                        llmOutput += partialData;
-                        onPartialResponse({ text: partialData });
+                        try {
+                            const chunkData = JSON.parse(chunk.toString());
+                            if (chunkData.response) {
+                                llmOutput += chunkData.response;
+                                onPartialResponse({ text: chunkData.response });
+                            }
+                        } catch (e: any) {
+                            this.logger.error(`Error parsing LLM streaming chunk: ${e.message}`);
+                        }
                     });
                     response.data.on('end', () => {
                         this.logger.debug('LLM streaming response ended.');
@@ -71,8 +80,8 @@ class LlmService {
                     });
                 });
             } else {
-                const response = await axios.post(this.llmApiUrl + '/completions', requestBody, { headers });
-                llmOutput = response.data.choices[0].text;
+                const response = await axios.post(this.llmApiUrl + '/api/generate', requestBody, { headers });
+                llmOutput = response.data.response;
 
                 if (structuredPrompt.classified_intent === 'system_command' || structuredPrompt.classified_intent === 'utility_request') {
                     action = { action: 'OPEN_APP', app_name: 'Terminal' };
@@ -94,33 +103,26 @@ class LlmService {
         }
     }
 
-    private _formatPromptForLLM(structuredPrompt: any): any[] {
-        let promptMessages = [
-            { role: "system", content: structuredPrompt.system_message },
-        ];
+    private _formatPromptForLLM(structuredPrompt: any): string {
+        let promptParts: string[] = [];
+
+        promptParts.push(`System: ${structuredPrompt.system_message}`);
 
         structuredPrompt.conversation_history.forEach((interaction: any) => {
-            promptMessages.push({ role: "user", content: interaction.query });
-            promptMessages.push({ role: "assistant", content: interaction.response });
+            promptParts.push(`User: ${interaction.query}`);
+            promptParts.push(`Assistant: ${interaction.response}`);
         });
 
-        promptMessages.push({ role: "user", content: `User query (intent: ${structuredPrompt.classified_intent}): ${structuredPrompt.current_user_query}` });
+        promptParts.push(`User: User query (intent: ${structuredPrompt.classified_intent}): ${structuredPrompt.current_user_query}`);
 
-        promptMessages.push({
-            role: "system",
-            content: `User Settings: ${structuredPrompt.user_settings}\n` +
-                     `User Preferences: ${structuredPrompt.user_preferences}\n` +
-                     `User Roles: ${structuredPrompt.user_roles.join(', ')}\n` +
-                     `User Permissions: ${structuredPrompt.user_permissions.join(', ')}\n` +
-                     `Long-term Context: ${structuredPrompt.long_term_context}`
-        });
-
-        promptMessages.push({
-            role: "system",
-            content: structuredPrompt.action_directives_guide
-        });
+        promptParts.push(`System: User Settings: ${structuredPrompt.user_settings}`);
+        promptParts.push(`System: User Preferences: ${structuredPrompt.user_preferences}`);
+        promptParts.push(`System: User Roles: ${structuredPrompt.user_roles.join(', ')}`);
+        promptParts.push(`System: User Permissions: ${structuredPrompt.user_permissions.join(', ')}`);
+        promptParts.push(`System: Long-term Context: ${structuredPrompt.long_term_context}`);
+        promptParts.push(`System: ${structuredPrompt.action_directives_guide}`);
         
-        return promptMessages;
+        return promptParts.join('\n');
     }
 }
 

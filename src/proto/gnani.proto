@@ -17,6 +17,7 @@ message StartSessionRequest {
 message StartSessionResponse {
   bool success = 1;
   string message = 2;
+  string session_id = 3;
 }
 
 message SendAudioStreamRequest {

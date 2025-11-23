@@ -62,7 +62,7 @@ app.listen(PORT, () => {
     logger.info(`Server running on port ${PORT}`);
 });
 
-EOF
+EOF # End of index.js content
 else
     echo "index.js already exists. Skipping creation."
 fi
