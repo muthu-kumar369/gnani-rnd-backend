@@ -7,10 +7,12 @@ import { PORT } from './config/env.config.js'; // Use PORT from config
 import logger from './core/logger/logger.js'; // Updated path for logger
 import apiRoutes from './routes/index.js'; // Import consolidated routes from src/routes/index.js
 import errorHandler from './core/http/error.middleware.js';
+import corsMiddleware from './middleware/cors.middleware.js';
 
 const app: Application = express();
 
 // Middleware
+app.use(corsMiddleware);
 app.use(bodyParser.json());
 app.use(morgan('combined', { stream: { write: (message: string) => logger.info(message.trim()) } })); // Log HTTP requests
 
