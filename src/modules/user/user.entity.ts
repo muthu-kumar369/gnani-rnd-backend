@@ -31,7 +31,7 @@ export interface IProfile extends Document {
     dob?: Date;
     locale: string;
     language: string;
-    avatarUrl?: string;
+    profilePhoto?: string;
 }
 
 export interface ISecurity extends Document {
@@ -39,6 +39,12 @@ export interface ISecurity extends Document {
     lastFailedLogin?: Date;
     mfaEnabled: boolean;
     recoveryEmail?: string;
+}
+
+export interface IOAuthProvider extends Document {
+    provider: string;
+    providerUserId: string;
+    linkedAt: Date;
 }
 
 // Main User Interface
@@ -61,6 +67,8 @@ export interface IUser extends Document {
     security: ISecurity;
     notes: string[];
     metadata: any;
+    isOnboarded: boolean;
+    oauthProviders: IOAuthProvider[];
 }
 
 // Embedded Schemas
@@ -91,7 +99,7 @@ const profileSchema: Schema = new Schema({
     dob: Date,
     locale: { type: String, default: 'en-US' },
     language: { type: String, default: 'en' },
-    avatarUrl: String,
+    profilePhoto: String,
 }, { _id: false });
 
 const securitySchema: Schema = new Schema({
@@ -105,6 +113,12 @@ const securitySchema: Schema = new Schema({
             message: 'Invalid recovery email format'
         }
     }
+}, { _id: false });
+
+const oauthProviderSchema: Schema = new Schema({
+    provider: { type: String, required: true },
+    providerUserId: { type: String, required: true },
+    linkedAt: { type: Date, default: Date.now },
 }, { _id: false });
 
 const userSchema = new Schema({
@@ -130,7 +144,7 @@ const userSchema = new Schema({
         },
         index: true // Added index
     },
-    passwordHash: { type: String, required: true },
+    passwordHash: { type: String, required: false }, // Not required for OAuth users
     roles: [{ type: String, enum: ['owner', 'admin', 'user', 'guest'], default: ['user'] }],
     permissions: [{ type: String }], // List of allowed system actions
     settings: { type: settingsSchema, default: {} },
@@ -145,6 +159,8 @@ const userSchema = new Schema({
     security: { type: securitySchema, default: {} },
     notes: [{ type: String }], // Array of arbitrary user notes
     metadata: { type: Schema.Types.Mixed, default: {} }, // Flexible JSON for future extensions
+    isOnboarded: { type: Boolean, default: false },
+    oauthProviders: { type: [oauthProviderSchema], default: [] },
 }, { timestamps: true }); // Mongoose handles createdAt and updatedAt automatically
 
 // Ensure `updatedAt` is updated on save

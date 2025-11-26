@@ -8,11 +8,33 @@ import auditService from '../../core/logger/audit.service.js';
 import { JWT_SECRET } from '../../config/env.config.js';
 import { Logger } from 'winston';
 
-class AuthService {
+export class AuthService {
     private logger: Logger;
 
     constructor() {
         this.logger = createContextualLogger({ module: 'AuthService' });
+    }
+
+    public generateToken(userId: string, expiresIn: string = '1h'): string {
+        const payload = {
+            user: {
+                id: userId,
+            },
+        };
+
+        const now = Math.floor(Date.now() / 1000);
+        let exp = now + (60 * 60); // 1 hour
+
+        const unit = expiresIn.slice(-1);
+        const value = parseInt(expiresIn.slice(0, -1));
+
+        if (unit === 'h') {
+            exp = now + (value * 60 * 60);
+        } else if (unit === 'd') {
+            exp = now + (value * 24 * 60 * 60);
+        }
+
+        return jwt.sign({ ...payload, exp }, JWT_SECRET);
     }
 
     async registerUser(userData: any): Promise<IUser> {
@@ -66,15 +88,7 @@ class AuthService {
         user.lastLoginAt = new Date();
         await user.save();
 
-        const payload = {
-            user: {
-                id: user.id,
-                userId: user.userId,
-                roles: user.roles,
-            },
-        };
-
-        const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
+        const token = this.generateToken(user.userId);
         this.logger.info(`User logged in successfully: ${user.username}`);
         auditService.logAuthEvent(user.userId, 'LOGIN', 'success', { loginIdentifier });
 
@@ -82,4 +96,3 @@ class AuthService {
     }
 }
 
-export default new AuthService();

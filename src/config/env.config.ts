@@ -17,6 +17,26 @@ export const LLM_STREAMING_ENABLED: boolean = (process.env.LLM_STREAMING_ENABLED
 export const MONGODB_URI: string = process.env.MONGODB_URI || 'mongodb://localhost:27017/gnani';
 export const JWT_SECRET: string = process.env.JWT_SECRET || 'supersecretjwtkey'; // Default for development
 
+// OAuth Configuration
+export const GOOGLE_CLIENT_ID: string = process.env.GOOGLE_CLIENT_ID || 'your_google_client_id';
+export const GOOGLE_CLIENT_SECRET: string = process.env.GOOGLE_CLIENT_SECRET || 'your_google_client_secret';
+export const GOOGLE_REDIRECT_URI: string = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/auth/google/callback';
+
+export const APPLE_CLIENT_ID: string = process.env.APPLE_CLIENT_ID || 'your_apple_client_id';
+export const APPLE_TEAM_ID: string = process.env.APPLE_TEAM_ID || 'your_apple_team_id';
+export const APPLE_KEY_ID: string = process.env.APPLE_KEY_ID || 'your_apple_key_id';
+export const APPLE_PRIVATE_KEY: string = process.env.APPLE_PRIVATE_KEY || 'your_apple_private_key';
+export const APPLE_REDIRECT_URI: string = process.env.APPLE_REDIRECT_URI || 'http://localhost:3000/auth/apple/callback';
+
+export const GITHUB_CLIENT_ID: string = process.env.GITHUB_CLIENT_ID || 'your_github_client_id';
+export const GITHUB_CLIENT_SECRET: string = process.env.GITHUB_CLIENT_SECRET || 'your_github_client_secret';
+export const GITHUB_REDIRECT_URI: string = process.env.GITHUB_REDIRECT_URI || 'http://localhost:3000/auth/github/callback';
+
+export const MICROSOFT_CLIENT_ID: string = process.env.MICROSOFT_CLIENT_ID || 'your_microsoft_client_id';
+export const MICROSOFT_CLIENT_SECRET: string = process.env.MICROSOFT_CLIENT_SECRET || 'your_microsoft_client_secret';
+export const MICROSOFT_REDIRECT_URI: string = process.env.MICROSOFT_REDIRECT_URI || 'http://localhost:3000/auth/microsoft/callback';
+
+
 // Whisper Configuration
 export const WHISPER_MODEL_PATH: string = process.env.WHISPER_MODEL_PATH || './models/whisper-medium.pt'; // Path to Whisper model
 export const WHISPER_LANGUAGE: string = process.env.WHISPER_LANGUAGE || 'en';
