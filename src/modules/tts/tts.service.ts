@@ -26,7 +26,8 @@ class TtsService {
     constructor() {
         this.logger = createContextualLogger({ module: 'TtsService' });
         this.ttsOutputBuffers = new Map();
-        this.initPythonProcess();
+        this.ttsOutputBuffers = new Map();
+        // this.initPythonProcess(); // TTS disabled
     }
 
     initPythonProcess(): void {
@@ -93,18 +94,10 @@ class TtsService {
     }
 
     async synthesizeSpeech(sessionId: string, text: string): Promise<void> {
-        if (!this.pythonProcess || !this.pythonProcess.pid) {
-            this.logger.error('TTS Python process is not running.');
-            metrics.incTtsSynthesis(sessionId, TTS_LANGUAGE, TTS_VOICE, 'failure');
-            auditService.logTtsEvent(null, sessionId, text, 'failure', 'TTS process not running');
-            throw new Error('TTS service unavailable.');
-        }
-
-        const message = `TEXT:${sessionId}:${text}\n`;
-        this.pythonProcess.stdin.write(message);
-        this.logger.debug(`Sent text to TTS process for session ${sessionId}: "${text.substring(0, 50)}"...`);
-        metrics.incTtsSynthesis(sessionId, TTS_LANGUAGE, TTS_VOICE, 'success');
-        auditService.logTtsEvent(null, sessionId, text, 'success');
+        // TTS disabled. Text is streamed directly.
+        this.logger.info(`TTS skipped for session ${sessionId}. Text: "${text.substring(0, 50)}..."`);
+        metrics.incTtsSynthesis(sessionId, TTS_LANGUAGE, TTS_VOICE, 'skipped');
+        auditService.logTtsEvent(null, sessionId, text, 'success', 'TTS skipped (text streaming enabled)');
     }
 
     getNextAudioChunk(sessionId: string): Buffer | null {

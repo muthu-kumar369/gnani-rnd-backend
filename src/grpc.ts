@@ -44,7 +44,8 @@ const StartSession = (
 
     const newSessionId = sessionManager.startSession(
       user_id,
-      onTranscriptionCallback
+      onTranscriptionCallback,
+      undefined // onLlmChunkCallback not used for StartSession
     );
     logger.debug(`Generated newSessionId: ${newSessionId}`);
     logger.info(
@@ -88,17 +89,31 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
         );
         if (grpcCall) {
           logger.debug(`Writing to gRPC call for session ${sessionId}.`);
-          grpcCall.write({
-            sessionId: sessionId,
-            transcription: transcript,
-            llm_response: isFinal ? "Placeholder LLM response" : "",
-            action_directive: isFinal ? "Placeholder action" : "",
-          });
+          if (isFinal) {
+              grpcCall.write({
+                  final_text: transcript
+              });
+          } else {
+              grpcCall.write({
+                  partial_text: transcript
+              });
+          }
         } else {
           logger.warn(
             `grpcCall not available for session ${sessionId} in onTranscriptionCallback.`
           );
         }
+      };
+      
+      session.onLlmChunkCallback = (text: string) => {
+          logger.debug(`onLlmChunkCallback triggered for session ${sessionId}. Text: "${text}"`);
+          if (grpcCall) {
+              grpcCall.write({
+                  llm_chunk: text
+              });
+          } else {
+              logger.warn(`grpcCall not available for session ${sessionId} in onLlmChunkCallback.`);
+          }
       };
     }
   };

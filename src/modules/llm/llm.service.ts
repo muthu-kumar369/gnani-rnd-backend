@@ -59,8 +59,25 @@ class LlmService {
                         try {
                             const chunkData = JSON.parse(chunk.toString());
                             if (chunkData.response) {
-                                llmOutput += chunkData.response;
-                                onPartialResponse({ text: chunkData.response });
+                                const newContent = chunkData.response;
+                                let delta = newContent;
+
+                                // Smart Delta Detection:
+                                // Check if the new content starts with the previously accumulated output.
+                                // If so, the LLM is sending accumulated text, so we extract the delta.
+                                if (llmOutput.length > 0 && newContent.startsWith(llmOutput)) {
+                                    delta = newContent.substring(llmOutput.length);
+                                    llmOutput = newContent; // Update full output to match new content
+                                } else {
+                                    // Otherwise, assume it's a delta (or a new independent chunk)
+                                    llmOutput += newContent;
+                                }
+
+                                if (delta.length > 0) {
+                                    // this.logger.debug(`LLM Stream Delta: "${delta}"`);
+                                    console.log(`[LLM Service] Sending Delta: "${delta}"`);
+                                    onPartialResponse({ text: delta });
+                                }
                             }
                         } catch (e: any) {
                             this.logger.error(`Error parsing LLM streaming chunk: ${e.message}`);
@@ -68,6 +85,7 @@ class LlmService {
                     });
                     response.data.on('end', () => {
                         this.logger.debug('LLM streaming response ended.');
+                        console.log(`[LLM Service] Full Output: "${llmOutput}"`);
                         metrics.incLlmCall(sessionId, structuredPrompt.classified_intent, 'success');
                         auditService.logLlmEvent(userId, sessionId, structuredPrompt, { text: llmOutput }, 'success');
                         resolve();

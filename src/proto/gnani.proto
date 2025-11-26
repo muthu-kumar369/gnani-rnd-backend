@@ -27,10 +27,12 @@ message SendAudioStreamRequest {
 }
 
 message SendAudioStreamResponse {
-  string session_id = 1;
-  string transcription = 2; // Placeholder for ASR output
-  string llm_response = 3; // Placeholder for LLM output
-  string action_directive = 4; // Placeholder for action service
+  oneof event {
+    string partial_text = 1;
+    string llm_chunk = 2;
+    string final_text = 3;
+    string error_message = 4;
+  }
 }
 
 message EndSessionRequest {

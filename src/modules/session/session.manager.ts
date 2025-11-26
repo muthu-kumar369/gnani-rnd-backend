@@ -20,6 +20,7 @@ interface Session {
     lastActivity: number;
     timeoutId: NodeJS.Timeout | null;
     onTranscriptionCallback: (transcript: string, isFinal: boolean) => void;
+    onLlmChunkCallback?: (text: string) => void;
     metadata: any;
     currentTranscription: string;
 }
@@ -38,7 +39,7 @@ class SessionManager {
         metrics.activeSessionsGauge.set(0);
     }
 
-    startSession(userId: string, onTranscriptionCallback: (transcript: string, isFinal: boolean) => void): string {
+    startSession(userId: string, onTranscriptionCallback: (transcript: string, isFinal: boolean) => void, onLlmChunkCallback?: (text: string) => void): string {
         const sessionId = uuidv4();
         this.logger.debug(`Generated new session ID: ${sessionId}`);
         this.sessions.set(sessionId, {
@@ -47,6 +48,7 @@ class SessionManager {
             lastActivity: Date.now(),
             timeoutId: null,
             onTranscriptionCallback,
+            onLlmChunkCallback,
             metadata: {},
             currentTranscription: ''
         });
@@ -74,6 +76,10 @@ class SessionManager {
             session.audioBuffer.push(audioChunk); // Directly push the audioChunk
 
             whisperService.sendAudioChunk(sessionId, audioChunk, (transcript: string, isFinal: boolean) => {
+                this.logger.debug(`[SessionManager] Raw transcript from Whisper for ${sessionId}: "${transcript}" (isFinal: ${isFinal})`);
+                if (transcript === 'ACK') {
+                    return; // Ignore ACK messages
+                }
                 session.currentTranscription = transcript;
                 if (session.onTranscriptionCallback) {
                     session.onTranscriptionCallback(transcript, isFinal);
@@ -156,7 +162,8 @@ class SessionManager {
         const fullAudioBuffer = Buffer.concat(session.audioBuffer);
         
         await new Promise<void>(resolve => {
-            whisperService.sendAudioChunk(sessionId, fullAudioBuffer, (transcript: string, isFinal: boolean) => {
+            // Send an empty buffer with isLastChunk=true to trigger final transcription
+            whisperService.sendAudioChunk(sessionId, Buffer.alloc(0), (transcript: string, isFinal: boolean) => {
                 session.currentTranscription = transcript;
                 if (isFinal) {
                     if (session.onTranscriptionCallback) {
@@ -188,8 +195,8 @@ class SessionManager {
         this.logger.info(`Sending prompt to LLM for session ${sessionId}: ${JSON.stringify(llmPrompt)}`);
         try {
             const llmRawResponse = await llmService.getLlmResponse(llmPrompt, (partialResponse: { text: string }) => {
-                if (session.onTranscriptionCallback) {
-                    session.onTranscriptionCallback(partialResponse.text, false);
+                if (session.onLlmChunkCallback) {
+                    session.onLlmChunkCallback(partialResponse.text);
                 }
             });
             const parsedLlmResponse = llmResponseParser.parse(llmRawResponse);
@@ -218,12 +225,8 @@ class SessionManager {
         }
         
         if (llmResponseText) {
-            try {
-                await ttsService.synthesizeSpeech(sessionId, llmResponseText);
-            } catch (ttsError: any) {
-                this.logger.error(`Error during TTS synthesis for session ${sessionId}: ${ttsError.message}`);
-                auditService.logTtsEvent(session.userId, sessionId, llmResponseText, 'failure', ttsError.message);
-            }
+             // TTS generation removed. Text is streamed directly via onLlmChunkCallback or returned in final response.
+             this.logger.info(`LLM response generated for session ${sessionId}: ${llmResponseText.substring(0, 50)}...`);
         }
 
         queryProcessor.addInteractionToMemory(sessionId, processedQuery.cleanedText, llmResponseText);

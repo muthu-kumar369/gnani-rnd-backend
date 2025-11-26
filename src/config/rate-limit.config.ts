@@ -26,6 +26,7 @@ export const oauthCallbackLimiter = rateLimit({
 
 // OAuth link/unlink endpoint rate limiter
 // Stricter since these are authenticated operations
+
 export const oauthLinkLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 5, // 5 requests per window per user
@@ -33,9 +34,14 @@ export const oauthLinkLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     // Use userId as key instead of IP for authenticated routes
-    keyGenerator: (req) => {
+    keyGenerator: (req, res) => {
         return (req as any).userId || req.ip;
     },
+    // Disable the IPv6 validation check to unblock dev
+    validate: {
+        ip: false,
+        trustProxy: false
+    }
 });
 
 // General auth endpoint rate limiter

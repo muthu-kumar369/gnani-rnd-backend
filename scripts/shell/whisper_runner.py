@@ -50,6 +50,10 @@ def process_audio_chunk(session_id, audio_chunk_bytes, is_last_chunk):
     # Whisper's transcribe function expects a NumPy array of floats.
     # The audio chunk bytes are raw PCM, convert them.
     
+    # Ensure the buffer size is a multiple of the element size (2 bytes for int16)
+    if len(audio_chunk_bytes) % 2 != 0:
+        audio_chunk_bytes = audio_chunk_bytes[:-1]
+
     # Convert bytes to numpy array (assuming 16-bit PCM, little-endian)
     audio_np = np.frombuffer(audio_chunk_bytes, dtype=np.int16).astype(np.float32) / 32768.0
 
@@ -124,10 +128,18 @@ while True:
         # Read the raw audio data
         audio_chunk_bytes = sys.stdin.buffer.read(audio_length)
         
-        if not audio_chunk_bytes:
+        if audio_length > 0 and not audio_chunk_bytes:
             print(f"ERROR:{session_id}:Empty audio data received.", file=sys.stderr, flush=True)
             continue
         
+        # Allow empty audio chunk if it's the LAST chunk (signal to finalize)
+        if audio_length == 0 and not is_last_chunk:
+             print(f"ERROR:{session_id}:Empty audio data length with no LAST flag.", file=sys.stderr, flush=True)
+             continue
+        
+        # Debug logging
+        print(f"DEBUG: Received header: {header_line.strip()}, Audio Len: {audio_length}", file=sys.stderr, flush=True)
+
         process_audio_chunk(session_id, audio_chunk_bytes, is_last_chunk)
 
     except Exception as e:
