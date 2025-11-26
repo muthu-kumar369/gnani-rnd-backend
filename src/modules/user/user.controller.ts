@@ -22,6 +22,22 @@ class UserController {
         this.userServiceInstance = new UserService();
     }
 
+    async getMe(req: CustomRequest, res: Response, next: NextFunction): Promise<void> {
+        const userId = req.fullUser?.userId || (req as any).userId;
+        try {
+            if (!userId) {
+                throw new Error('User ID not found in request');
+            }
+            const user = await this.userServiceInstance.getUserById(userId);
+            auditService.logEvent('USER_ME_RETRIEVAL', userId, null, { action: 'getMe' }, 'success');
+            res.status(200).json(user);
+        } catch (error: any) {
+            this.logger.error(`Get me error for user ${userId}: ${error.message}`);
+            auditService.logEvent('USER_ME_RETRIEVAL', userId || null, null, { action: 'getMe', error: error.message }, 'failure');
+            next(error);
+        }
+    }
+
     async getProfile(req: CustomRequest, res: Response, next: NextFunction): Promise<void> {
         const userId = req.fullUser?.userId;
         try {

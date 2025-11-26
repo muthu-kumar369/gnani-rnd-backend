@@ -11,6 +11,18 @@ export class UserService {
         this.logger = createContextualLogger({ module: 'UserService' });
     }
 
+    async getUserById(userId: string): Promise<IUser> {
+        const user = await User.findOne({ userId }).select('-passwordHash');
+        if (!user) {
+            this.logger.warn(`User ${userId} not found when retrieving user by ID.`);
+            auditService.logEvent('USER_BY_ID_RETRIEVAL_SERVICE', userId, null, { action: 'getUserById', reason: 'User not found' }, 'failure');
+            throw new Error('User not found');
+        }
+        this.logger.info(`User retrieved by ID for user: ${userId}`);
+        auditService.logEvent('USER_BY_ID_RETRIEVAL_SERVICE', userId, null, { action: 'getUserById' }, 'success');
+        return user;
+    }
+
     async getUserProfile(userId: string): Promise<IUser> {
         const user = await User.findOne({ userId }).select('-passwordHash -security -history -devices -notes -metadata');
         if (!user) {

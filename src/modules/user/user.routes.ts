@@ -5,6 +5,9 @@ import { authMiddleware } from '../../core/security/auth.middleware.js';
 
 const router = express.Router();
 
+// Current User Route
+router.get('/me', authMiddleware, userController.getMe.bind(userController));
+
 // User Profile & Settings Routes (Protected)
 router.get('/profile', authMiddleware, userController.getProfile.bind(userController));
 router.put('/profile', authMiddleware, userController.updateProfile.bind(userController));
@@ -34,3 +37,4 @@ router.post('/notes', authMiddleware, userController.addNote.bind(userController
 router.delete('/notes/:index', authMiddleware, userController.deleteNote.bind(userController));
 
 export default router;
+

@@ -47,6 +47,17 @@ export interface IOAuthProvider extends Document {
     linkedAt: Date;
 }
 
+export interface IRefreshToken extends Document {
+    token: string;
+    expiresAt: Date;
+    issuedAt: Date;
+    revoked: boolean;
+    replacedByToken?: string;
+    // Potentially add a device identifier or IP address for more granular control
+    deviceId?: string;
+    userAgent?: string;
+}
+
 // Main User Interface
 export interface IUser extends Document {
     userId: string;
@@ -69,6 +80,7 @@ export interface IUser extends Document {
     metadata: any;
     isOnboarded: boolean;
     oauthProviders: IOAuthProvider[];
+    refreshTokens: IRefreshToken[];
 }
 
 // Embedded Schemas
@@ -121,6 +133,16 @@ const oauthProviderSchema: Schema = new Schema({
     linkedAt: { type: Date, default: Date.now },
 }, { _id: false });
 
+const refreshTokenSchema: Schema = new Schema({
+    token: { type: String, required: true },
+    expiresAt: { type: Date, required: true },
+    issuedAt: { type: Date, default: Date.now },
+    revoked: { type: Boolean, default: false },
+    replacedByToken: { type: String },
+    deviceId: { type: String },
+    userAgent: { type: String },
+}, { _id: false });
+
 const userSchema = new Schema({
     userId: { type: String, default: uuidv4, unique: true, required: true, index: true }, // Added index
     username: {
@@ -161,6 +183,7 @@ const userSchema = new Schema({
     metadata: { type: Schema.Types.Mixed, default: {} }, // Flexible JSON for future extensions
     isOnboarded: { type: Boolean, default: false },
     oauthProviders: { type: [oauthProviderSchema], default: [] },
+    refreshTokens: { type: [refreshTokenSchema], default: [] },
 }, { timestamps: true }); // Mongoose handles createdAt and updatedAt automatically
 
 // Ensure `updatedAt` is updated on save

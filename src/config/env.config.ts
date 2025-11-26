@@ -16,6 +16,7 @@ export const LLM_TEMPERATURE: number = parseFloat(process.env.LLM_TEMPERATURE ||
 export const LLM_STREAMING_ENABLED: boolean = (process.env.LLM_STREAMING_ENABLED === 'true');
 export const MONGODB_URI: string = process.env.MONGODB_URI || 'mongodb://localhost:27017/gnani';
 export const JWT_SECRET: string = process.env.JWT_SECRET || 'supersecretjwtkey'; // Default for development
+export const JWT_ENCRYPTION_SECRET: string = process.env.JWT_ENCRYPTION_SECRET || 'supersecretjwtokencryptionkeylongenough'; // Used for encrypting refresh tokens
 
 // OAuth Configuration
 export const GOOGLE_CLIENT_ID: string = process.env.GOOGLE_CLIENT_ID || 'your_google_client_id';

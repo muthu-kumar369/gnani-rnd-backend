@@ -19,10 +19,28 @@ interface GitHubProfileResponse {
 export class GitHubAdapter {
     private readonly config = oauthConfig.github;
 
+    /**
+     * Generate GitHub OAuth authorization URL
+     * Note: GitHub doesn't support nonce or PKCE
+     * @param state - CSRF protection state
+     * @param redirectUri - Optional custom redirect URI
+     * @returns Authorization URL
+     */
+    public generateAuthUrl(state: string, redirectUri?: string): string {
+        const params = new URLSearchParams({
+            client_id: this.config.clientId,
+            redirect_uri: redirectUri || this.config.redirectUri,
+            scope: this.config.scopes.join(' '),
+            state,
+        });
+
+        return `${this.config.authUrl}?${params.toString()}`;
+    }
+
     public async exchangeCodeForToken(code: string): Promise<GitHubTokenResponse> {
         const { clientId, clientSecret } = this.config;
         const { data } = await axios.post<GitHubTokenResponse>(
-            'https://github.com/login/oauth/access_token',
+            this.config.tokenUrl,
             {
                 code,
                 client_id: clientId,

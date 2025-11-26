@@ -42,12 +42,34 @@ export class AppleAdapter {
         });
     }
 
+    /**
+     * Generate Apple OAuth authorization URL
+     * Note: Apple supports nonce but not PKCE
+     * @param state - CSRF protection state
+     * @param nonce - Replay attack protection nonce
+     * @param redirectUri - Optional custom redirect URI
+     * @returns Authorization URL
+     */
+    public generateAuthUrl(state: string, nonce: string, redirectUri?: string): string {
+        const params = new URLSearchParams({
+            client_id: this.config.clientId,
+            redirect_uri: redirectUri || this.config.redirectUri,
+            response_type: 'code',
+            scope: this.config.scopes.join(' '),
+            state,
+            nonce,
+            response_mode: 'form_post', // Apple recommends form_post for security
+        });
+
+        return `${this.config.authUrl}?${params.toString()}`;
+    }
+
     public async exchangeCodeForToken(code: string): Promise<AppleTokenResponse> {
         const { clientId, redirectUri } = this.config;
         const clientSecret = this.getClientSecret();
 
         const { data } = await axios.post<AppleTokenResponse>(
-            'https://appleid.apple.com/auth/token',
+            this.config.tokenUrl,
             new URLSearchParams({
                 code,
                 client_id: clientId,
