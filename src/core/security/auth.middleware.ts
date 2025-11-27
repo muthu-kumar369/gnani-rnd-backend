@@ -31,14 +31,14 @@ export const authMiddleware = async (req: CustomRequest, res: Response, next: Ne
         req.user = decoded.user;
 
         // Optionally, fetch full user object from DB and attach
-        req.fullUser = await User.findById(req.user.id).select('-passwordHash');
+        req.fullUser = await User.findOne({ userId: req.user.id }).select('-passwordHash');
         if (!req.fullUser) {
             return res.status(401).json({ message: 'User not found, authorization denied' });
         }
         next();
     } catch (err: any) {
         logger.error(`Auth middleware error: ${err.message}`);
-        res.status(401).json({ message: 'Token is not valid' });
+        res.status(401).json({ message: `Token is not valid: ${err.message}` });
     }
 };
 
