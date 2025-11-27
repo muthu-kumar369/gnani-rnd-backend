@@ -33,14 +33,11 @@ export const oauthLinkLimiter = rateLimit({
     message: 'Too many OAuth link/unlink requests, please try again later.',
     standardHeaders: true,
     legacyHeaders: false,
-    // Use userId as key instead of IP for authenticated routes
+    // Use userId as key for authenticated routes.
+    // Fallback to 'anonymous' to avoid accessing req.ip which triggers IPv6 validation error.
+    // Unauthenticated requests should be blocked by auth middleware anyway.
     keyGenerator: (req, res) => {
-        return (req as any).userId || req.ip;
-    },
-    // Disable the IPv6 validation check to unblock dev
-    validate: {
-        ip: false,
-        trustProxy: false
+        return (req as any).userId || 'anonymous';
     }
 });
 
