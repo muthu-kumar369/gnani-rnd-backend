@@ -105,11 +105,13 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
         }
       };
       
-      session.onLlmChunkCallback = (text: string) => {
-          logger.debug(`onLlmChunkCallback triggered for session ${sessionId}. Text: "${text}"`);
+      session.onLlmChunkCallback = (chunk: any) => {
+          logger.debug(`onLlmChunkCallback triggered for session ${sessionId}. Chunk: ${JSON.stringify(chunk)}`);
           if (grpcCall) {
+              // Serialize to JSON string to pass through gRPC string field
+              const payload = typeof chunk === 'string' ? chunk : JSON.stringify(chunk);
               grpcCall.write({
-                  llm_chunk: text
+                  llm_chunk: payload
               });
           } else {
               logger.warn(`grpcCall not available for session ${sessionId} in onLlmChunkCallback.`);
@@ -157,7 +159,19 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
         logger.info(
           `End of audio stream received for session: ${currentSessionId}.`
         );
-        await sessionManager.finalizeSessionProcessing(currentSessionId);
+        const result = await sessionManager.finalizeSessionProcessing(currentSessionId);
+        
+        // Send the complete LLM response if available
+        if (result && result.llmResponse) {
+            logger.info(`Sending COMPLETE LLM response for session ${currentSessionId}`);
+            call.write({
+                llm_chunk: JSON.stringify({
+                    type: 'complete_response',
+                    text: result.llmResponse
+                })
+            });
+        }
+        
         call.end(); // End the bidirectional stream
       }
     }

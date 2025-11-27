@@ -20,7 +20,12 @@ class ContextEngine {
         const llmPrompt = {
             system_message: `You are GNANI, an advanced AI assistant designed to help users with a wide range of tasks. You can have natural conversations, execute system commands, and access user-specific information.
             Current Time: ${context.timestamp}
-            User Profile: ${JSON.stringify(context.userProfile)}`,
+            User Profile: ${JSON.stringify(context.userProfile)}
+            
+            IMPORTANT INSTRUCTIONS:
+            1. Do NOT repeat the Current Time, User Profile, or User Query in your response.
+            2. Respond directly to the user's intent.
+            3. Keep responses concise and natural.`,
             user_settings: JSON.stringify(context.userSettings),
             user_preferences: JSON.stringify(context.userPreferences),
             user_roles: context.userRoles,

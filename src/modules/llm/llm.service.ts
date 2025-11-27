@@ -45,7 +45,10 @@ class LlmService {
                 model: LLM_MODEL_PATH,
                 prompt: formattedPrompt,
                 max_tokens: LLM_MAX_TOKENS,
-                temperature: LLM_TEMPERATURE,
+                temperature: 0.2, // Reduced for stability
+                top_p: 0.9,
+                frequency_penalty: 0.7, // Anti-loop
+                presence_penalty: 0.2,  // Anti-loop
                 stream: LLM_STREAMING_ENABLED,
             };
 
@@ -53,30 +56,104 @@ class LlmService {
             let action = null;
 
             if (LLM_STREAMING_ENABLED && onPartialResponse) {
+                // Send a debug chunk to verify pipeline
+                onPartialResponse({ type: 'debug', text: 'LLM_STREAM_START' } as any);
+
                 const response = await axios.post(this.llmApiUrl + '/api/generate', requestBody, { headers, responseType: 'stream' });
+                
+                // Text Stabilization Buffer
+                let stabilizationBuffer = '';
+                
                 await new Promise<void>((resolve, reject) => {
                     response.data.on('data', (chunk: any) => {
                         try {
                             const chunkData = JSON.parse(chunk.toString());
                             if (chunkData.response) {
                                 const newContent = chunkData.response;
-                                let delta = newContent;
+                                
+                                // Validate: Check for malformed/garbage responses
+                                const isMalformed = /^[\.\*\s\?\!,;:]{1,3}$/.test(newContent.trim());
+                                
+                                // Detect repetitive words (e.g., "it it it it")
+                                const words = newContent.trim().split(/\s+/);
+                                const isRepetitive = words.length > 2 && words.every((w: string, i: number) => i === 0 || w === words[0]);
+                                
+                                if (isMalformed || isRepetitive) {
+                                    this.logger.warn(`Detected malformed/repetitive LLM chunk: "${newContent}". Proceeding anyway for debug.`);
+                                    // return; // DISABLED FILTER FOR DEBUGGING
+                                }
+                                
+                                let delta = '';
 
-                                // Smart Delta Detection:
-                                // Check if the new content starts with the previously accumulated output.
-                                // If so, the LLM is sending accumulated text, so we extract the delta.
+                                // Smart Delta Detection
                                 if (llmOutput.length > 0 && newContent.startsWith(llmOutput)) {
                                     delta = newContent.substring(llmOutput.length);
-                                    llmOutput = newContent; // Update full output to match new content
+                                    llmOutput = newContent;
+                                } else if (llmOutput.length === 0) {
+                                    delta = newContent;
+                                    llmOutput = newContent;
                                 } else {
-                                    // Otherwise, assume it's a delta (or a new independent chunk)
+                                    // Fallback for non-matching delta
+                                    delta = newContent;
                                     llmOutput += newContent;
                                 }
 
                                 if (delta.length > 0) {
-                                    // this.logger.debug(`LLM Stream Delta: "${delta}"`);
-                                    console.log(`[LLM Service] Sending Delta: "${delta}"`);
-                                    onPartialResponse({ text: delta });
+                                    // Add to stabilization buffer
+                                    stabilizationBuffer += delta;
+
+                                    // Check if we have a complete word/sentence (ends with space or punctuation)
+                                    // We look for the LAST delimiter to split safe vs unsafe text
+                                    const lastDelimiterIndex = stabilizationBuffer.search(/[\s\.\,\!\?\;\:]+[^\s\.\,\!\?\;\:]*$/);
+                                    
+                                    if (lastDelimiterIndex !== -1) {
+                                        // We have at least one stable word
+                                        // "start the mu" -> "start the " is stable, "mu" is partial
+                                        // Actually, regex above finds the START of the last non-delimiter group?
+                                        // Let's use a simpler approach: split by delimiters, keep the last part if it doesn't end with delimiter
+                                        
+                                        // If buffer ends with delimiter, everything is stable
+                                        if (/[\s\.\,\!\?\;\:]$/.test(stabilizationBuffer)) {
+                                            const finalChunk = stabilizationBuffer;
+                                            stabilizationBuffer = '';
+                                            console.log(`[LLM Service] Sending FINAL: "${finalChunk}"`);
+                                            // @ts-ignore - Sending object instead of string
+                                            onPartialResponse({ type: 'final', text: finalChunk });
+                                        } else {
+                                            // Buffer does NOT end with delimiter (e.g. "start the mu")
+                                            // Find the last delimiter
+                                            const lastSpace = stabilizationBuffer.lastIndexOf(' ');
+                                            // Also check for punctuation if space is not found or punctuation is later
+                                            // For simplicity, let's just use space as the main stabilizer for words
+                                            
+                                            if (lastSpace !== -1) {
+                                                const stablePart = stabilizationBuffer.substring(0, lastSpace + 1);
+                                                const unstablePart = stabilizationBuffer.substring(lastSpace + 1);
+                                                
+                                                stabilizationBuffer = unstablePart;
+                                                
+                                                console.log(`[LLM Service] Sending FINAL: "${stablePart}"`);
+                                                // @ts-ignore
+                                                onPartialResponse({ type: 'final', text: stablePart });
+                                                
+                                                if (unstablePart.length > 0) {
+                                                    console.log(`[LLM Service] Sending PARTIAL: "${unstablePart}"`);
+                                                    // @ts-ignore
+                                                    onPartialResponse({ type: 'partial', text: unstablePart });
+                                                }
+                                            } else {
+                                                // No space yet, just send partial
+                                                console.log(`[LLM Service] Sending PARTIAL: "${stabilizationBuffer}"`);
+                                                // @ts-ignore
+                                                onPartialResponse({ type: 'partial', text: stabilizationBuffer });
+                                            }
+                                        }
+                                    } else {
+                                        // No delimiters at all, send as partial
+                                        console.log(`[LLM Service] Sending PARTIAL: "${stabilizationBuffer}"`);
+                                        // @ts-ignore
+                                        onPartialResponse({ type: 'partial', text: stabilizationBuffer });
+                                    }
                                 }
                             }
                         } catch (e: any) {
@@ -85,6 +162,14 @@ class LlmService {
                     });
                     response.data.on('end', () => {
                         this.logger.debug('LLM streaming response ended.');
+                        
+                        // Flush remaining buffer as final
+                        if (stabilizationBuffer.length > 0) {
+                             console.log(`[LLM Service] Flushing FINAL: "${stabilizationBuffer}"`);
+                             // @ts-ignore
+                             onPartialResponse({ type: 'final', text: stabilizationBuffer });
+                        }
+                        
                         console.log(`[LLM Service] Full Output: "${llmOutput}"`);
                         metrics.incLlmCall(sessionId, structuredPrompt.classified_intent, 'success');
                         auditService.logLlmEvent(userId, sessionId, structuredPrompt, { text: llmOutput }, 'success');

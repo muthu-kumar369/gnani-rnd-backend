@@ -194,9 +194,10 @@ class SessionManager {
 
         this.logger.info(`Sending prompt to LLM for session ${sessionId}: ${JSON.stringify(llmPrompt)}`);
         try {
-            const llmRawResponse = await llmService.getLlmResponse(llmPrompt, (partialResponse: { text: string }) => {
+            const llmRawResponse = await llmService.getLlmResponse(llmPrompt, (partialResponse: any) => {
                 if (session.onLlmChunkCallback) {
-                    session.onLlmChunkCallback(partialResponse.text);
+                    // Pass the full object (type + text)
+                    session.onLlmChunkCallback(partialResponse);
                 }
             });
             const parsedLlmResponse = llmResponseParser.parse(llmRawResponse);
