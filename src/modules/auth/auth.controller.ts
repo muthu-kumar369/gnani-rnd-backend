@@ -156,5 +156,22 @@ export default {
             auditService.logAuthEvent((req as any).userId, 'OAUTH_UNLINK', 'failure', { provider, error: error.message });
             next(error);
         }
+    },
+
+    async logout(req: Request, res: Response, next: NextFunction): Promise<void> {
+        const { refreshToken } = req.body;
+        const userId = (req as any).userId;
+
+        try {
+            if (refreshToken && userId) {
+                await authService.logoutUser(userId, refreshToken);
+            }
+            auditService.logAuthEvent(userId || null, 'LOGOUT', 'success');
+            res.status(200).json({ message: 'Logged out successfully' });
+        } catch (error: any) {
+            logger.error(`Logout error: ${error.message}`);
+            // Even if backend logout fails, we return success so frontend can clear tokens
+            res.status(200).json({ message: 'Logged out successfully' });
+        }
     }
 };

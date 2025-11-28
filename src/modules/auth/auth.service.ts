@@ -194,5 +194,15 @@ export class AuthService {
             user: { userId: user.userId, username: user.username, email: user.email, roles: user.roles, isOnboarded: user.isOnboarded },
         };
     }
+    public async logoutUser(userId: string, refreshToken: string): Promise<void> {
+        try {
+            const decryptedToken = decryptToken(refreshToken);
+            await this.revokeRefreshToken(userId, decryptedToken);
+            this.logger.info(`User ${userId} logged out successfully (token revoked).`);
+        } catch (error: any) {
+            this.logger.warn(`Logout failed for user ${userId}: ${error.message}`);
+            // We don't throw here to allow the logout process to complete even if token is invalid
+        }
+    }
 }
 

@@ -10,6 +10,7 @@ const router = Router();
 router.post('/register', authLimiter, authController.register);
 router.post('/login', authLimiter, authController.login);
 router.post('/refresh-token', authLimiter, authController.refreshToken);
+router.post('/logout', authMiddleware, authController.logout);
 
 // OAuth Routes
 router.post('/oauth', authLimiter, authController.oauth); // Backward compatibility
