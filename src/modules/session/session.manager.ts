@@ -160,7 +160,7 @@ class SessionManager {
         }
 
         const fullAudioBuffer = Buffer.concat(session.audioBuffer);
-        
+
         await new Promise<void>(resolve => {
             // Send an empty buffer with isLastChunk=true to trigger final transcription
             whisperService.sendAudioChunk(sessionId, Buffer.alloc(0), (transcript: string, isFinal: boolean) => {
@@ -177,10 +177,37 @@ class SessionManager {
         const finalTranscription = session.currentTranscription;
         this.clearAudioBuffer(sessionId);
 
+        return this.processQueryAndGenerateResponse(sessionId, finalTranscription);
+    }
+
+    async processTextInput(sessionId: string, textInput: string): Promise<any> {
+        this.logger.info(`Processing text input for session ${sessionId}: "${textInput}"`);
+        const session = this.sessions.get(sessionId);
+        if (!session) {
+            this.logger.error(`Session ${sessionId} not found during text input processing.`);
+            return null;
+        }
+
+        // Update last activity
+        session.lastActivity = Date.now();
+        this.resetSessionTimeout(sessionId);
+
+        // Notify callback about the input (simulating STT result)
+        if (session.onTranscriptionCallback) {
+            session.onTranscriptionCallback(textInput, true);
+        }
+
+        return this.processQueryAndGenerateResponse(sessionId, textInput);
+    }
+
+    private async processQueryAndGenerateResponse(sessionId: string, textInput: string): Promise<any> {
+        const session = this.sessions.get(sessionId);
+        if (!session) return null;
+
         const processedQuery = await queryProcessor.processTranscript(
             sessionId,
             session.userId,
-            finalTranscription
+            textInput
         );
 
         const llmPrompt = await contextEngine.buildLLMPrompt(
@@ -222,17 +249,17 @@ class SessionManager {
                 actionDirective = null;
             }
         } else {
-             this.logger.info(`No action to dispatch for session ${sessionId}.`);
+            this.logger.info(`No action to dispatch for session ${sessionId}.`);
         }
-        
+
         if (llmResponseText) {
-             // TTS generation removed. Text is streamed directly via onLlmChunkCallback or returned in final response.
-             this.logger.info(`LLM response generated for session ${sessionId}: ${llmResponseText.substring(0, 50)}...`);
+            // TTS generation removed. Text is streamed directly via onLlmChunkCallback or returned in final response.
+            this.logger.info(`LLM response generated for session ${sessionId}: ${llmResponseText.substring(0, 50)}...`);
         }
 
         queryProcessor.addInteractionToMemory(sessionId, processedQuery.cleanedText, llmResponseText);
 
-        auditService.logEvent('SESSION_FINALIZE', session.userId, sessionId, { finalTranscription, llmResponseText, actionDirective }, 'success');
+        auditService.logEvent('SESSION_FINALIZE', session.userId, sessionId, { finalTranscription: textInput, llmResponseText, actionDirective }, 'success');
 
         return {
             cleanedText: processedQuery.cleanedText,

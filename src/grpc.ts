@@ -32,8 +32,8 @@ const StartSession = (
   logger.info("StartSession received call.request:", call.request);
   logger.info("StartSession received call.metadata:", call.metadata);
 
-    logger.debug('StartSession received call.request:', call.request);
-    logger.debug('StartSession received call.metadata:', call.metadata);
+  logger.debug('StartSession received call.request:', call.request);
+  logger.debug('StartSession received call.metadata:', call.metadata);
   const { user_id } = call.request;
   try {
     const onTranscriptionCallback = (transcript: string, isFinal: boolean) => {
@@ -90,13 +90,13 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
         if (grpcCall) {
           logger.debug(`Writing to gRPC call for session ${sessionId}.`);
           if (isFinal) {
-              grpcCall.write({
-                  final_text: transcript
-              });
+            grpcCall.write({
+              final_text: transcript
+            });
           } else {
-              grpcCall.write({
-                  partial_text: transcript
-              });
+            grpcCall.write({
+              partial_text: transcript
+            });
           }
         } else {
           logger.warn(
@@ -104,18 +104,18 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
           );
         }
       };
-      
+
       session.onLlmChunkCallback = (chunk: any) => {
-          logger.debug(`onLlmChunkCallback triggered for session ${sessionId}. Chunk: ${JSON.stringify(chunk)}`);
-          if (grpcCall) {
-              // Serialize to JSON string to pass through gRPC string field
-              const payload = typeof chunk === 'string' ? chunk : JSON.stringify(chunk);
-              grpcCall.write({
-                  llm_chunk: payload
-              });
-          } else {
-              logger.warn(`grpcCall not available for session ${sessionId} in onLlmChunkCallback.`);
-          }
+        logger.debug(`onLlmChunkCallback triggered for session ${sessionId}. Chunk: ${JSON.stringify(chunk)}`);
+        if (grpcCall) {
+          // Serialize to JSON string to pass through gRPC string field
+          const payload = typeof chunk === 'string' ? chunk : JSON.stringify(chunk);
+          grpcCall.write({
+            llm_chunk: payload
+          });
+        } else {
+          logger.warn(`grpcCall not available for session ${sessionId} in onLlmChunkCallback.`);
+        }
       };
     }
   };
@@ -149,29 +149,54 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
         return;
       }
 
-      await sessionManager.appendAudioChunk(
-        currentSessionId,
-        chunk.audio_chunk,
-        16000
-      );
+      // Handle Text Input
+      if (chunk.text_input) {
+        logger.info(`Received text input for session ${currentSessionId}: ${chunk.text_input}`);
+        const result = await sessionManager.processTextInput(currentSessionId, chunk.text_input);
+
+        // Send the complete LLM response if available
+        if (result && result.llmResponse) {
+          logger.info(`Sending COMPLETE LLM response for session ${currentSessionId}`);
+          call.write({
+            llm_chunk: JSON.stringify({
+              type: 'complete_response',
+              text: result.llmResponse
+            })
+          });
+        }
+
+        if (chunk.end_of_stream) {
+          call.end();
+        }
+        return;
+      }
+
+      // Handle Audio Input
+      if (chunk.audio_chunk && chunk.audio_chunk.length > 0) {
+        await sessionManager.appendAudioChunk(
+          currentSessionId,
+          chunk.audio_chunk,
+          16000
+        );
+      }
 
       if (chunk.end_of_stream) {
         logger.info(
           `End of audio stream received for session: ${currentSessionId}.`
         );
         const result = await sessionManager.finalizeSessionProcessing(currentSessionId);
-        
+
         // Send the complete LLM response if available
         if (result && result.llmResponse) {
-            logger.info(`Sending COMPLETE LLM response for session ${currentSessionId}`);
-            call.write({
-                llm_chunk: JSON.stringify({
-                    type: 'complete_response',
-                    text: result.llmResponse
-                })
-            });
+          logger.info(`Sending COMPLETE LLM response for session ${currentSessionId}`);
+          call.write({
+            llm_chunk: JSON.stringify({
+              type: 'complete_response',
+              text: result.llmResponse
+            })
+          });
         }
-        
+
         call.end(); // End the bidirectional stream
       }
     }
@@ -179,16 +204,14 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
 
   call.on("end", () => {
     logger.info(
-      `gRPC SendAudioStream ended for session: ${
-        currentSessionId || "unknown"
+      `gRPC SendAudioStream ended for session: ${currentSessionId || "unknown"
       }.`
     );
   });
 
   call.on("error", (error: Error) => {
     logger.error(
-      `gRPC SendAudioStream error for session ${
-        currentSessionId || "unknown"
+      `gRPC SendAudioStream error for session ${currentSessionId || "unknown"
       }: ${error.message}`
     );
     if (currentSessionId) {
