@@ -50,7 +50,9 @@ class SettingsManager {
                 wakeWord: 'Hey Gnani',
                 preferredVoice: 'default',
                 volume: 75,
-                theme: 'dark'
+                theme: 'dark',
+                avatarEnabled: true,
+                avatarGender: 'female'
             },
             preferences: {},
             roles: ['user'],

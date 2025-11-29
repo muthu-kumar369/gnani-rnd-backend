@@ -90,6 +90,8 @@ const settingsSchema: Schema = new Schema({
     volume: { type: Number, min: 0, max: 100, default: 75 },
     theme: { type: String, default: 'dark' },
     shortcuts: { type: Map, of: String }, // Map for custom command shortcuts
+    avatarEnabled: { type: Boolean, default: true },
+    avatarGender: { type: String, default: 'female' },
 }, { _id: false });
 
 const deviceSchema: Schema = new Schema({

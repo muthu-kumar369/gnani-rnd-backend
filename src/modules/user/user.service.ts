@@ -65,7 +65,19 @@ export class UserService {
         }
         this.logger.info(`User settings retrieved for user: ${userId}`);
         auditService.logEvent('USER_SETTINGS_RETRIEVAL_SERVICE', userId, null, { action: 'getUserSettings' }, 'success');
-        return { settings: user.settings, preferences: user.preferences };
+
+        const defaultSettings = {
+            wakeWord: 'Hey Gnani',
+            preferredVoice: 'default',
+            volume: 75,
+            theme: 'dark',
+            avatarEnabled: true,
+            avatarGender: 'female'
+        };
+
+        const mergedSettings = { ...defaultSettings, ...(user.settings ? JSON.parse(JSON.stringify(user.settings)) : {}) };
+
+        return { settings: mergedSettings, preferences: user.preferences };
     }
 
     async updateUserSettings(userId: string, settingsData: any): Promise<any> {
@@ -76,8 +88,19 @@ export class UserService {
             throw new Error('User not found');
         }
 
-        user.settings = { ...user.settings, ...settingsData.settings };
-        user.preferences = { ...user.preferences, ...settingsData.preferences };
+        // Safely merge settings
+        if (settingsData.settings) {
+             // Use Mongoose's set() or direct assignment with Object.assign to ensure subdocument is updated correctly
+             // We convert existing settings to object to avoid Mongoose internal properties issues during merge
+             const currentSettings = user.settings ? JSON.parse(JSON.stringify(user.settings)) : {};
+             user.settings = { ...currentSettings, ...settingsData.settings };
+             user.markModified('settings');
+        }
+
+        if (settingsData.preferences) {
+             user.preferences = { ...user.preferences, ...settingsData.preferences };
+             user.markModified('preferences');
+        }
 
         await user.save();
         this.logger.info(`User settings updated for user: ${userId}`);
@@ -169,7 +192,7 @@ export class UserService {
         }
 
         if (securityData.mfaEnabled !== undefined) user.security.mfaEnabled = securityData.mfaEnabled;
-        if (securityData.recoveryEmail !== undefined) user.security.recoveryEmail = securityData.recoveryEmail;
+        if (securityData.recoveryEmail) user.security.recoveryEmail = securityData.recoveryEmail;
 
         await user.save();
         this.logger.info(`User security info updated for user: ${userId}`);
