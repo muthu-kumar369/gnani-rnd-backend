@@ -105,13 +105,13 @@ export class OAuthService {
             throw new Error('Invalid or expired OAuth session');
         }
 
-        // Validate nonce if applicable
-        if (!this.stateService.validateNonce(session, nonce)) {
+        // Validate nonce if applicable and provided
+        if (nonce && !this.stateService.validateNonce(session, nonce)) {
             throw new Error('Invalid nonce');
         }
 
         // Exchange code for token and get profile
-        const profile = await this.exchangeCodeAndGetProfile(provider, code, session.codeVerifier);
+        const profile = await this.exchangeCodeAndGetProfile(provider, code, session.codeVerifier, session.redirectUri);
 
         // If this is a linking flow (userId exists in session), link provider to existing user
         if (session.userId) {
@@ -208,13 +208,14 @@ export class OAuthService {
     private async exchangeCodeAndGetProfile(
         provider: string,
         code: string,
-        codeVerifier?: string
+        codeVerifier?: string,
+        redirectUri?: string
     ): Promise<Partial<IUser>> {
         let profile: Partial<IUser>;
 
         switch (provider) {
             case 'google':
-                const googleToken = await this.googleAdapter.exchangeCodeForToken(code, codeVerifier);
+                const googleToken = await this.googleAdapter.exchangeCodeForToken(code, codeVerifier, redirectUri);
                 profile = await this.googleAdapter.getProfile(googleToken.access_token);
                 break;
             case 'apple':

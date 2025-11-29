@@ -93,7 +93,7 @@ const settingsSchema: Schema = new Schema({
 }, { _id: false });
 
 const deviceSchema: Schema = new Schema({
-    deviceId: { type: String, default: uuidv4, unique: true },
+    deviceId: { type: String, default: uuidv4 },
     deviceName: { type: String, required: true },
     deviceType: { type: String, required: true }, // e.g., 'mobile', 'desktop', 'web', 'speaker'
     lastActive: { type: Date, default: Date.now },

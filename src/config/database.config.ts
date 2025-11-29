@@ -12,7 +12,25 @@ const connectDB = async (): Promise<void> => {
             process.exit(1);
         }
         await mongoose.connect(MONGODB_URI);
+        await mongoose.connect(MONGODB_URI);
         logger.info('MongoDB connected successfully');
+
+        // Fix for duplicate key error on devices.deviceId
+        try {
+            const usersCollection = mongoose.connection.collection('users');
+            // Check if index exists before dropping to avoid errors
+            const indexes = await usersCollection.indexes();
+            const indexName = 'devices.deviceId_1';
+            const indexExists = indexes.some(index => index.name === indexName);
+            
+            if (indexExists) {
+                await usersCollection.dropIndex(indexName);
+                logger.info(`Dropped legacy unique index: ${indexName}`);
+            }
+        } catch (indexError: any) {
+             // Log warning but don't fail connection
+             logger.warn(`Attempted to drop index devices.deviceId_1 but failed (this is expected if it doesn't exist): ${indexError.message}`);
+        }
     } catch (err: any) {
         logger.error(`MongoDB connection error: ${err.message}`);
         process.exit(1); // Exit process with failure

@@ -59,14 +59,14 @@ export class GoogleAdapter {
         return `${this.config.authUrl}?${params.toString()}`;
     }
 
-    public async exchangeCodeForToken(code: string, codeVerifier?: string): Promise<GoogleTokenResponse> {
-        const { clientId, clientSecret, redirectUri } = this.config;
+    public async exchangeCodeForToken(code: string, codeVerifier?: string, redirectUri?: string): Promise<GoogleTokenResponse> {
+        const { clientId, clientSecret, redirectUri: configRedirectUri } = this.config;
 
         const body: any = {
             code,
             client_id: clientId,
             client_secret: clientSecret,
-            redirect_uri: redirectUri,
+            redirect_uri: redirectUri || configRedirectUri,
             grant_type: 'authorization_code',
         };
 
