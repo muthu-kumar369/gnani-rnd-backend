@@ -2,6 +2,7 @@
 import User, { IUser, IDevice } from './user.entity.js';
 import { createContextualLogger } from '../../core/logger/logger.js';
 import auditService from '../../core/logger/audit.service.js';
+import cacheService from '../../core/cache/cache.service.js';
 import { Logger } from 'winston';
 
 export class UserService {
@@ -51,6 +52,13 @@ export class UserService {
         if (profileData.profilePhoto) user.profile.profilePhoto = profileData.profilePhoto;
 
         await user.save();
+        
+        // Invalidate related caches
+        await cacheService.del([
+            `api:${userId}::user:me`,
+            `api:${userId}::user:profile`
+        ]);
+        
         this.logger.info(`User profile updated for user: ${userId}`);
         auditService.logEvent('USER_PROFILE_UPDATE_SERVICE', userId, null, { action: 'updateUserProfile', updatedFields: Object.keys(profileData) }, 'success');
         return user;
@@ -103,6 +111,13 @@ export class UserService {
         }
 
         await user.save();
+        
+        // Invalidate related caches
+        await cacheService.del([
+            `api:${userId}::user:me`,
+            `api:${userId}::user:settings`
+        ]);
+        
         this.logger.info(`User settings updated for user: ${userId}`);
         auditService.logEvent('USER_SETTINGS_UPDATE_SERVICE', userId, null, { action: 'updateUserSettings', updatedFields: Object.keys(settingsData) }, 'success');
         return user.settings;
@@ -129,6 +144,10 @@ export class UserService {
         }
         user.devices.push(deviceData);
         await user.save();
+        
+        // Invalidate devices cache
+        await cacheService.del(`api:${userId}::user:devices`);
+        
         this.logger.info(`Device added for user: ${userId}`);
         auditService.logEvent('USER_DEVICE_ADD_SERVICE', userId, null, { action: 'addDevice', deviceName: deviceData.deviceName }, 'success');
         return user.devices;
@@ -151,6 +170,10 @@ export class UserService {
 
         user.devices[deviceIndex] = { ...(user.devices[deviceIndex].toObject()), ...updateData };
         await user.save();
+        
+        // Invalidate devices cache
+        await cacheService.del(`api:${userId}::user:devices`);
+        
         this.logger.info(`Device ${deviceId} updated for user: ${userId}`);
         auditService.logEvent('USER_DEVICE_UPDATE_SERVICE', userId, null, { action: 'updateDevice', deviceId, updatedFields: Object.keys(updateData) }, 'success');
         return user.devices;
@@ -166,6 +189,10 @@ export class UserService {
 
         user.devices = user.devices.filter((d: IDevice) => d.deviceId !== deviceId);
         await user.save();
+        
+        // Invalidate devices cache
+        await cacheService.del(`api:${userId}::user:devices`);
+        
         this.logger.info(`Device ${deviceId} removed for user: ${userId}`);
         auditService.logEvent('USER_DEVICE_REMOVE_SERVICE', userId, null, { action: 'removeDevice', deviceId }, 'success');
         return user.devices;
@@ -195,6 +222,10 @@ export class UserService {
         if (securityData.recoveryEmail) user.security.recoveryEmail = securityData.recoveryEmail;
 
         await user.save();
+        
+        // Invalidate security cache
+        await cacheService.del(`api:${userId}::user:security`);
+        
         this.logger.info(`User security info updated for user: ${userId}`);
         auditService.logEvent('USER_SECURITY_UPDATE_SERVICE', userId, null, { action: 'updateUserSecurity', updatedFields: Object.keys(securityData) }, 'success');
         return user.security;
@@ -222,6 +253,10 @@ export class UserService {
 
         user.oauthProviders = user.oauthProviders.filter(p => p.provider !== provider);
         await user.save();
+        
+        // Invalidate OAuth cache
+        await cacheService.del(`api:${userId}::user:oauth`);
+        
         this.logger.info(`OAuth provider ${provider} unlinked for user: ${userId}`);
         auditService.logEvent('USER_OAUTH_UNLINK_SERVICE', userId, null, { action: 'unlinkOAuthProvider', provider }, 'success');
         return user.oauthProviders;
@@ -249,6 +284,10 @@ export class UserService {
 
         user.history = user.history.filter((h: any) => h._id.toString() !== historyId);
         await user.save();
+        
+        // Invalidate history cache
+        await cacheService.del(`api:${userId}::user:history`);
+        
         this.logger.info(`History item ${historyId} deleted for user: ${userId}`);
         auditService.logEvent('USER_HISTORY_DELETE_ITEM_SERVICE', userId, null, { action: 'deleteUserHistoryItem', historyId }, 'success');
         return user.history;
@@ -264,6 +303,10 @@ export class UserService {
 
         user.history = [];
         await user.save();
+        
+        // Invalidate history cache
+        await cacheService.del(`api:${userId}::user:history`);
+        
         this.logger.info(`History cleared for user: ${userId}`);
         auditService.logEvent('USER_HISTORY_CLEAR_SERVICE', userId, null, { action: 'clearUserHistory' }, 'success');
     }
@@ -290,6 +333,10 @@ export class UserService {
 
         user.notes.push(note);
         await user.save();
+        
+        // Invalidate notes cache
+        await cacheService.del(`api:${userId}::user:notes`);
+        
         this.logger.info(`Note added for user: ${userId}`);
         auditService.logEvent('USER_NOTE_ADD_SERVICE', userId, null, { action: 'addUserNote' }, 'success');
         return user.notes;
@@ -306,6 +353,10 @@ export class UserService {
         if (index >= 0 && index < user.notes.length) {
             user.notes.splice(index, 1);
             await user.save();
+            
+            // Invalidate notes cache
+            await cacheService.del(`api:${userId}::user:notes`);
+            
             this.logger.info(`Note at index ${index} deleted for user: ${userId}`);
             auditService.logEvent('USER_NOTE_DELETE_SERVICE', userId, null, { action: 'deleteUserNote', index }, 'success');
         } else {

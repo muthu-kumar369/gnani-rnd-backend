@@ -28,6 +28,17 @@ services:
       ALLOW_RESET: "true" # Allows resetting the ChromaDB instance for development
     restart: always
 
+  redis:
+    image: redis:7-alpine
+    container_name: gnani-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: always
+
 volumes:
   mongodb_data:
   chromadb_data:
+  redis_data:

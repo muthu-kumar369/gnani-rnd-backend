@@ -6,13 +6,28 @@
 
 echo "Starting database setup..."
 
-echo "Bringing up MongoDB and ChromaDB with Docker Compose..."
+echo "Bringing up MongoDB, ChromaDB, and Redis with Docker Compose..."
 docker compose up -d
 if [ $? -ne 0 ]; then
     echo "Error: Docker Compose failed to start databases. Please check Docker and docker-compose.yml configuration."
     exit 1
 fi
 echo "Databases started successfully."
+
+# Wait for Redis to be ready
+echo "Waiting for Redis to be ready..."
+max_retries=30
+retry_count=0
+until docker exec gnani-redis redis-cli ping 2>/dev/null | grep -q PONG; do
+    retry_count=$((retry_count + 1))
+    if [ $retry_count -ge $max_retries ]; then
+        echo "Error: Redis failed to start after $max_retries attempts."
+        exit 1
+    fi
+    echo "Waiting for Redis... ($retry_count/$max_retries)"
+    sleep 1
+done
+echo "✓ Redis is ready!"
 
 
 

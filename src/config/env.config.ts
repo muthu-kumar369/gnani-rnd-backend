@@ -56,3 +56,9 @@ export const TTS_LANGUAGE: string = process.env.TTS_LANGUAGE || 'en';
 export const TTS_SAMPLE_RATE: number = parseInt(process.env.TTS_SAMPLE_RATE || '22050', 10); // Common sample rate for TTS
 export const TTS_STREAM_CHUNK_SIZE: number = parseInt(process.env.TTS_STREAM_CHUNK_SIZE || '1024', 10); // Size of audio chunks for streaming
 export const TTS_PYTHON_PATH: string = process.env.TTS_PYTHON_PATH || './.venv/bin/python'; // Path to Python executable for TTS
+
+// Redis Configuration
+export const REDIS_HOST: string = process.env.REDIS_HOST || 'localhost';
+export const REDIS_PORT: number = parseInt(process.env.REDIS_PORT || '6379', 10);
+export const REDIS_PASSWORD: string | undefined = process.env.REDIS_PASSWORD;
+export const REDIS_DB: number = parseInt(process.env.REDIS_DB || '0', 10);
