@@ -209,21 +209,31 @@ class LlmService {
     private _formatPromptForLLM(structuredPrompt: any): string {
         let promptParts: string[] = [];
 
-        promptParts.push(`System: ${structuredPrompt.system_message}`);
+        // 1. Construct the System Message Block
+        let systemBlock = `System: ${structuredPrompt.system_message}`;
+        
+        // Add context to system block if available
+        if (structuredPrompt.long_term_context && structuredPrompt.long_term_context.trim()) {
+            systemBlock += `\n\nRelevant Context from Memory:\n${structuredPrompt.long_term_context}`;
+        }
+        
+        promptParts.push(systemBlock);
 
-        structuredPrompt.conversation_history.forEach((interaction: any) => {
-            promptParts.push(`User: ${interaction.query}`);
-            promptParts.push(`Assistant: ${interaction.response}`);
-        });
+        // 2. Add Conversation History
+        if (structuredPrompt.conversation_history && structuredPrompt.conversation_history.length > 0) {
+            structuredPrompt.conversation_history.forEach((interaction: any) => {
+                if (interaction.query) {
+                    promptParts.push(`User: ${interaction.query}`);
+                }
+                if (interaction.response) {
+                    promptParts.push(`Assistant: ${interaction.response}`);
+                }
+            });
+        }
 
-        promptParts.push(`User: User query (intent: ${structuredPrompt.classified_intent}): ${structuredPrompt.current_user_query}`);
-
-        promptParts.push(`System: User Settings: ${structuredPrompt.user_settings}`);
-        promptParts.push(`System: User Preferences: ${structuredPrompt.user_preferences}`);
-        promptParts.push(`System: User Roles: ${structuredPrompt.user_roles.join(', ')}`);
-        promptParts.push(`System: User Permissions: ${structuredPrompt.user_permissions.join(', ')}`);
-        promptParts.push(`System: Long-term Context: ${structuredPrompt.long_term_context}`);
-        promptParts.push(`System: ${structuredPrompt.action_directives_guide}`);
+        // 3. Add Current User Query
+        promptParts.push(`User: ${structuredPrompt.current_user_query}`);
+        promptParts.push(`Assistant:`);
         
         return promptParts.join('\n');
     }

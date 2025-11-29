@@ -184,20 +184,32 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
         logger.info(
           `End of audio stream received for session: ${currentSessionId}.`
         );
-        const result = await sessionManager.finalizeSessionProcessing(currentSessionId);
+        
+        try {
+          const result = await sessionManager.finalizeSessionProcessing(currentSessionId);
 
-        // Send the complete LLM response if available
-        if (result && result.llmResponse) {
-          logger.info(`Sending COMPLETE LLM response for session ${currentSessionId}`);
+          // Send the complete LLM response if available
+          if (result && result.llmResponse) {
+            logger.info(`Sending COMPLETE LLM response for session ${currentSessionId}`);
+            call.write({
+              llm_chunk: JSON.stringify({
+                type: 'complete_response',
+                text: result.llmResponse
+              })
+            });
+          }
+        } catch (error: any) {
+          logger.error(`Error finalizing session ${currentSessionId}: ${error.message}`);
+          // Optionally send an error message to the client
           call.write({
             llm_chunk: JSON.stringify({
-              type: 'complete_response',
-              text: result.llmResponse
+              type: 'error',
+              text: "I'm sorry, I encountered an error processing your request."
             })
           });
+        } finally {
+          call.end(); // End the bidirectional stream
         }
-
-        call.end(); // End the bidirectional stream
       }
     }
   });

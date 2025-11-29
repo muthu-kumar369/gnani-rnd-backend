@@ -62,13 +62,16 @@ class WhisperService {
 
                         this.logger.debug(`Transcribed Text for session ${sessionId}: '${transcript}' (isFinal: ${isFinal})`); // Log the transcribed text
 
-                        // If transcription is empty, log a warning and don't proceed with callback
+                        // If transcription is empty, log a warning
                         if (!transcript.trim()) {
-                            this.logger.warn(`Empty transcription received for session ${sessionId}. Skipping further processing.`);
+                            this.logger.warn(`Empty transcription received for session ${sessionId}.`);
                             auditService.logWhisperEvent(null, sessionId, message, transcript, 'warning', 'Empty transcription');
-                            // Optionally, you might want to call the callback with an empty string or specific status
-                            // if the downstream logic expects it, but for now, we just skip.
-                            return; 
+                            
+                            // CRITICAL FIX: If it's not final, we can skip. But if it IS final, we MUST call the callback
+                            // to resolve the promise in finalizeSessionProcessing.
+                            if (!isFinal) {
+                                return;
+                            }
                         }
 
                         const callback = this.transcriptionCallbacks.get(sessionId);

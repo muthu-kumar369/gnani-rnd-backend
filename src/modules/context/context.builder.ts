@@ -1,20 +1,25 @@
 // src/services/contextBuilder.ts
 import logger from '../../core/logger/logger.js';
 import settingsManager from '../user/settings.manager.js';
-import vectorManager from '../vector/vector.manager.js';
-import queryProcessor from '../query/query.processor.js';
+import memoryManager from '../memory/memory.manager.js';
 
 class ContextBuilder {
     constructor() {
         logger.info('ContextBuilder initialized.');
     }
 
-    async buildContext(userId: string, sessionId: string, currentQuery: string, topKEmbeddings = 3): Promise<any> {
+    async buildContext(userId: string, sessionId: string, currentQuery: string, tokenBudget = 4000): Promise<any> {
         logger.debug(`Building context for session ${sessionId}, user ${userId}. Query: "${currentQuery}"`);
 
         const userSettings = await settingsManager.getUserSettings(userId);
-        const sessionMemory = queryProcessor.getSessionMemory(sessionId);
-        const longTermContext = await vectorManager.getRelevantEmbeddings(userId, currentQuery, topKEmbeddings);
+        
+        // Use unified memory manager to get all context
+        const memoryContext = await memoryManager.getContextForPrompt(
+            userId,
+            sessionId,
+            currentQuery,
+            tokenBudget
+        );
 
         return {
             userId,
@@ -25,8 +30,10 @@ class ContextBuilder {
             userPreferences: userSettings.preferences,
             userRoles: userSettings.roles,
             userPermissions: userSettings.permissions,
-            shortTermMemory: sessionMemory,
-            longTermContext: longTermContext,
+            shortTermMemory: memoryContext.shortTermMessages,
+            longTermContext: memoryContext.longTermMemories,
+            sessionState: memoryContext.sessionState,
+            memoryMetadata: memoryContext.metadata,
             timestamp: new Date().toISOString(),
         };
     }

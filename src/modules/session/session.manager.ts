@@ -109,6 +109,14 @@ class SessionManager {
             queryProcessor.clearSessionMemory(sessionId);
             ttsService.cleanupSession(sessionId);
             audioStreamer.cleanupSession(sessionId);
+            
+            // Clean up memory system caches
+            import('../memory/memory.manager.js').then(module => {
+                module.default.clearSessionMemory(sessionId).catch((err: any) => {
+                    this.logger.error(`Error clearing session memory: ${err.message}`);
+                });
+            });
+            
             this.logger.info(`Session ended: ${sessionId}`);
             metrics.activeSessionsGauge.inc();
             auditService.logEvent('SESSION_END', session.userId, sessionId, {}, 'success');
@@ -257,6 +265,26 @@ class SessionManager {
             this.logger.info(`LLM response generated for session ${sessionId}: ${llmResponseText.substring(0, 50)}...`);
         }
 
+        // Store interaction in memory system (fire-and-forget to not block response)
+        import('../memory/memory.manager.js').then(module => {
+            module.default.storeInteraction(
+                session.userId,
+                sessionId,
+                processedQuery.cleanedText,
+                llmResponseText,
+                {
+                    intent: processedQuery.intent,
+                    action: actionDirective,
+                    cacheHit: processedQuery.cacheHit
+                }
+            ).catch(err => {
+                this.logger.error(`Error storing interaction in memory: ${err.message}`);
+            });
+        }).catch(err => {
+            this.logger.error(`Error importing memory manager: ${err.message}`);
+        });
+
+        // Keep old in-memory storage for backward compatibility (will be deprecated)
         queryProcessor.addInteractionToMemory(sessionId, processedQuery.cleanedText, llmResponseText);
 
         auditService.logEvent('SESSION_FINALIZE', session.userId, sessionId, { finalTranscription: textInput, llmResponseText, actionDirective }, 'success');

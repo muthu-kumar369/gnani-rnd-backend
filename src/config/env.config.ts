@@ -62,3 +62,10 @@ export const REDIS_HOST: string = process.env.REDIS_HOST || 'localhost';
 export const REDIS_PORT: number = parseInt(process.env.REDIS_PORT || '6379', 10);
 export const REDIS_PASSWORD: string | undefined = process.env.REDIS_PASSWORD;
 export const REDIS_DB: number = parseInt(process.env.REDIS_DB || '0', 10);
+
+// Memory System Configuration
+export const MEMORY_SHORT_TERM_RETENTION_DAYS: number = parseInt(process.env.MEMORY_SHORT_TERM_RETENTION_DAYS || '30', 10);
+export const MEMORY_MAX_CONTEXT_TOKENS: number = parseInt(process.env.MEMORY_MAX_CONTEXT_TOKENS || '4000', 10);
+export const MEMORY_SUMMARIZATION_BATCH_SIZE: number = parseInt(process.env.MEMORY_SUMMARIZATION_BATCH_SIZE || '10', 10);
+export const MEMORY_REDIS_TTL_SECONDS: number = parseInt(process.env.MEMORY_REDIS_TTL_SECONDS || '3600', 10);
+export const MEMORY_LONG_TERM_TOP_K: number = parseInt(process.env.MEMORY_LONG_TERM_TOP_K || '5', 10);
