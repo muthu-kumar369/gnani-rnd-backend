@@ -24,6 +24,66 @@ class LlmService {
         auditService.logEvent('LLM_SERVICE_INIT', null, null, {}, 'success');
     }
 
+    async getToolDecision(decisionPrompt: any): Promise<{ needs_tool: boolean, tool_name?: string, parameters?: any }> {
+        const sessionId = decisionPrompt.session_id;
+        this.logger.debug(`Getting tool decision for session ${sessionId}`);
+
+        try {
+            const headers: any = {
+                'Content-Type': 'application/json',
+            };
+            if (LLM_API_KEY && LLM_API_KEY !== 'your_llm_api_key_here') {
+                headers['Authorization'] = `Bearer ${LLM_API_KEY}`;
+            }
+
+            // Format prompt for decision (simple system + user)
+            const promptText = `System: ${decisionPrompt.system_message}\n\nUser: ${decisionPrompt.user_query}`;
+            
+            const requestBody = {
+                model: LLM_MODEL_PATH,
+                prompt: promptText,
+                max_tokens: 200, // Short response expected
+                temperature: 0.1, // Low temp for deterministic JSON
+                stream: false,
+                stop: ["User:", "System:"],
+                // response_format: { type: "json_object" } // Uncomment if model supports it
+            };
+
+            const response = await axios.post(this.llmApiUrl + '/api/generate', requestBody, { headers });
+            let content = response.data.response;
+            
+            // Extract JSON from content
+            // 1. Try to find markdown code block first
+            const markdownMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+            if (markdownMatch) {
+                content = markdownMatch[1];
+            } else {
+                // 2. Fallback: Try to find the first '{' and the last '}'
+                const firstBrace = content.indexOf('{');
+                const lastBrace = content.lastIndexOf('}');
+                if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+                    content = content.substring(firstBrace, lastBrace + 1);
+                }
+            }
+
+            try {
+                const decision = JSON.parse(content);
+                this.logger.info(`Tool decision for session ${sessionId}: ${JSON.stringify(decision)}`);
+                console.log(`[LlmService] Tool Decision Parsed: ${JSON.stringify(decision)}`);
+                return decision;
+            } catch (e) {
+                this.logger.warn(`Failed to parse tool decision JSON: ${content}`);
+                console.warn(`[LlmService] Failed to parse JSON: ${content}`);
+                return { needs_tool: false };
+            }
+
+        } catch (error: any) {
+            this.logger.error(`Error getting tool decision: ${error.message}`);
+            console.error(`[LlmService] Error getting tool decision: ${error.message}`);
+            return { needs_tool: false };
+        }
+    }
+    
     async getLlmResponse(structuredPrompt: any, onPartialResponse: ((response: { text: string }) => void) | null = null): Promise<{ text: string, action: any }> {
         const sessionId = structuredPrompt.session_id;
         const userId = structuredPrompt.user_id;
@@ -47,8 +107,8 @@ class LlmService {
                 max_tokens: LLM_MAX_TOKENS,
                 temperature: 0.7, // Increased for natural conversation
                 top_p: 0.9,
-                frequency_penalty: 0.7, // Anti-loop
-                presence_penalty: 0.2,  // Anti-loop
+                frequency_penalty: 1.0, // Increased to strongly discourage repetition
+                presence_penalty: 0.5,  // Increased to encourage new topics
                 stop: ["User:", "System:"], // Prevent hallucinating next turns
                 stream: LLM_STREAMING_ENABLED,
             };

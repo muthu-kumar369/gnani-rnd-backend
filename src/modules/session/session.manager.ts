@@ -224,6 +224,54 @@ class SessionManager {
             processedQuery
         );
 
+        // --- TOOL LAYER START ---
+        // 1. Check if a tool is needed
+        
+        let toolResult = null;
+        try {
+            // Use dynamic import for tool registry to avoid circular dependency issues if any, 
+            // or just use the top-level import if I add it. 
+            // Let's use top-level import, but I need to add it.
+            // For now, I will assume I added it to the top.
+            // Wait, I can't easily add to top with replace_file_content unless I target line 1.
+            // I'll use dynamic import here as it's safer for now without touching top of file.
+            const toolRegistryModule = await import('../tools/index.js');
+            const toolRegistry = toolRegistryModule.default;
+
+            const toolDefinitions = toolRegistry.getToolDefinitions();
+            console.log(`[ToolLayer] Loaded ${toolDefinitions.length} tools: ${toolDefinitions.map((t: any) => t.name).join(', ')}`);
+
+            const decisionPrompt = contextEngine.buildToolDecisionPrompt(
+                toolDefinitions,
+                processedQuery.cleanedText,
+                sessionId
+            );
+            
+            console.log(`[ToolLayer] Requesting decision for query: "${processedQuery.cleanedText}"`);
+            const decision = await llmService.getToolDecision(decisionPrompt);
+            console.log(`[ToolLayer] Decision: ${JSON.stringify(decision)}`);
+            
+            if (decision.needs_tool && decision.tool_name) {
+                this.logger.info(`Tool execution triggered: ${decision.tool_name}`);
+                console.log(`[ToolLayer] Executing tool: ${decision.tool_name} with params: ${JSON.stringify(decision.parameters)}`);
+                // 2. Execute the tool
+                const result = await toolRegistry.executeTool(decision.tool_name, decision.parameters);
+                toolResult = result;
+                this.logger.info(`Tool execution result: ${JSON.stringify(result)}`);
+                console.log(`[ToolLayer] Tool Result: ${JSON.stringify(result)}`);
+                
+                // 3. Enrich the prompt with tool result
+                contextEngine.enrichPromptWithToolResult(llmPrompt, toolResult);
+            } else {
+                console.log(`[ToolLayer] No tool needed.`);
+            }
+        } catch (toolError: any) {
+            this.logger.error(`Tool layer error: ${toolError.message}`);
+            console.error(`[ToolLayer] Error: ${toolError.message}`);
+            // Continue without tool (fallback to normal LLM)
+        }
+        // --- TOOL LAYER END ---
+
         let llmResponseText = '';
         let actionDirective = null;
 
