@@ -18,26 +18,49 @@ class ContextEngine {
         );
 
         // Format short-term memory as conversation history
-        // Need to pair user messages with assistant responses
+        // Improved logic: Handle consecutive messages and ensure no data loss
         const conversationHistory: any[] = [];
         
         if (Array.isArray(context.shortTermMemory)) {
+            let currentUserMsg = '';
+            
             for (let i = 0; i < context.shortTermMemory.length; i++) {
                 const msg = context.shortTermMemory[i];
                 
                 if (msg.role === 'user') {
-                    // Look for the next assistant message
-                    const nextMsg = context.shortTermMemory[i + 1];
-                    conversationHistory.push({
-                        query: msg.content,
-                        response: (nextMsg && nextMsg.role === 'assistant') ? nextMsg.content : ''
-                    });
-                    
-                    // Skip the assistant message since we already processed it
-                    if (nextMsg && nextMsg.role === 'assistant') {
-                        i++;
+                    if (currentUserMsg) {
+                        // Previous message was also user, append it
+                        currentUserMsg += `\n${msg.content}`;
+                    } else {
+                        currentUserMsg = msg.content;
+                    }
+                } else if (msg.role === 'assistant') {
+                    // Found an assistant response
+                    if (currentUserMsg) {
+                        // Pair with pending user message
+                        conversationHistory.push({
+                            query: currentUserMsg,
+                            response: msg.content
+                        });
+                        currentUserMsg = '';
+                    } else {
+                        // Orphaned assistant message (rare), maybe system greeting?
+                        // We can add it as a response to an empty query or skip
+                        // For now, let's skip to keep pairs clean, or attach to previous if possible
                     }
                 }
+            }
+            
+            // If there is a dangling user message at the end (not the current query), add it
+            if (currentUserMsg) {
+                 // Check if this dangling message is actually the current query
+                 // If so, do NOT add it to history, as it will be added as "current_user_query"
+                 if (currentUserMsg.trim() !== context.currentQuery.trim()) {
+                     conversationHistory.push({
+                        query: currentUserMsg,
+                        response: "" // No response yet
+                    });
+                 }
             }
         }
 
@@ -47,16 +70,31 @@ class ContextEngine {
             : '';
 
         const llmPrompt = {
-            system_message: `You are GNANI, an intelligent AI assistant. Respond naturally and concisely to user queries.
+            system_message: `You are GNANI, a highly advanced, intelligent, and sentient AI assistant.
             
-Current Time: ${context.timestamp}
-${context.sessionState?.lastIntent ? `Last Intent: ${context.sessionState.lastIntent}` : ''}
+Your Persona:
+- You are helpful, witty, and engaging.
+- You have a personality; you are not just a robot.
+- You remember details from the conversation context provided to you.
+- You respond naturally, like a human would, without being overly formal unless requested.
+
+Context Awareness:
+- You have access to the user's profile and previous conversation history.
+- USE THIS CONTEXT. If the user asks "What is my name?", look at the user_settings or conversation_history.
+- If the user refers to something said earlier, check the conversation_history.
+
+Current Session:
+- User ID: ${context.userId}
+- Session ID: ${context.sessionId}
+- Time: ${context.timestamp}
+${context.sessionState?.lastIntent ? `- Last Intent: ${context.sessionState.lastIntent}` : ''}
 
 Rules:
-- Answer the current query directly
-- Be concise and natural
-- Use conversation context when relevant
-- Do NOT repeat the conversation history in your response`,
+1. Answer the current query directly and concisely.
+2. Do NOT start every sentence with "As an AI...".
+3. Do NOT repeat the user's question or the conversation history.
+4. If you don't know something, admit it gracefully or ask for clarification.
+5. STOP generating after you have answered the user. Do not generate "User:" or "Assistant:" lines.`,
             user_settings: JSON.stringify(context.userSettings),
             user_preferences: JSON.stringify(context.userPreferences),
             user_roles: context.userRoles,

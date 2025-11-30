@@ -45,10 +45,11 @@ class LlmService {
                 model: LLM_MODEL_PATH,
                 prompt: formattedPrompt,
                 max_tokens: LLM_MAX_TOKENS,
-                temperature: 0.2, // Reduced for stability
+                temperature: 0.7, // Increased for natural conversation
                 top_p: 0.9,
                 frequency_penalty: 0.7, // Anti-loop
                 presence_penalty: 0.2,  // Anti-loop
+                stop: ["User:", "System:"], // Prevent hallucinating next turns
                 stream: LLM_STREAMING_ENABLED,
             };
 
