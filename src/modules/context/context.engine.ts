@@ -9,7 +9,7 @@ class ContextEngine {
         logger.info('ContextEngine initialized with dynamic features.');
     }
 
-    async buildLLMPrompt(sessionId: string, userId: string, processedQuery: { cleanedText: string; intent: string; }): Promise<any> {
+    async buildLLMPrompt(sessionId: string, userId: string, processedQuery: { cleanedText: string; intent: string; }, toolDefinitions: any[] = []): Promise<any> {
         logger.debug(`Building LLM prompt for session ${sessionId}, user ${userId}. Intent: ${processedQuery.intent}`);
 
         // PHASE 2A: Analyze query complexity for adaptive features
@@ -20,7 +20,8 @@ class ContextEngine {
             userId,
             sessionId,
             processedQuery.cleanedText,
-            4000 // Base budget - adaptive budget handled in memory manager
+            4000, // Base budget - will be overridden by adaptive calculation
+            complexity.score // Pass complexity for adaptive budgeting
         );
 
         // PHASE 1: Simplified conversation history formatting with semantic deduplication
@@ -79,8 +80,16 @@ class ContextEngine {
 
         logger.debug(`Selected template: ${selectedTemplate.name}`);
 
+        // PHASE 2: Integrated Tool Routing
+        // Append tool definitions to system message
+        let systemMessage = selectedTemplate.systemMessage;
+        if (toolDefinitions.length > 0) {
+            const toolsJson = JSON.stringify(toolDefinitions, null, 2);
+            systemMessage += `\n\n# AVAILABLE TOOLS\nYou have access to the following tools. Use them when necessary to fulfill the user's request.\n${toolsJson}\n\n# TOOL USE INSTRUCTIONS\nIf you need to use a tool, your response MUST be a valid JSON object matching this schema:\n{\n  "tool": "tool_name",\n  "params": { ... }\n}\n\nIf no tool is needed, respond naturally with text.`;
+        }
+
         const llmPrompt = {
-            system_message: selectedTemplate.systemMessage,
+            system_message: systemMessage,
             user_settings: JSON.stringify(context.userSettings),
             user_preferences: JSON.stringify(context.userPreferences),
             user_roles: context.userRoles,

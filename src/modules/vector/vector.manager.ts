@@ -1,35 +1,64 @@
 // src/services/vectorManager.ts
 import { ChromaClient, Collection } from 'chromadb';
 import logger from '../../core/logger/logger.js';
-// Removed unused imports from config, assuming ChromaDB connection details are directly passed or handled internally
-// const { VECTOR_DB_HOST, VECTOR_DB_PORT, COLLECTION_NAME, API_KEY } = require('../configs/config');
+import { pipeline, env } from '@xenova/transformers';
+import path from 'path';
+import fs from 'fs';
 
-// Placeholder for an embedding function. In a real scenario, this would use an actual embedding model.
-async function getDummyEmbedding(text: string): Promise<number[]> {
-    logger.debug(`Generating dummy embedding for text: "${text}"`);
-    const hash = text.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    return Array(1536).fill(hash % 1000 / 1000); // Return a fixed-size array for simulation
+// Configure local cache for models
+const modelPath = path.join(process.cwd(), 'models');
+if (!fs.existsSync(modelPath)) {
+    fs.mkdirSync(modelPath, { recursive: true });
 }
+
+env.localModelPath = modelPath;
+env.allowRemoteModels = true; // Allow downloading if not present
+env.allowLocalModels = true;
 
 class VectorManager {
     private client: ChromaClient | null = null;
     private collection: Collection | null = null;
+    private embeddingPipeline: any = null;
     private VECTOR_DB_HOST: string = process.env.VECTOR_DB_HOST || 'localhost';
     private VECTOR_DB_PORT: string = process.env.VECTOR_DB_PORT || '8000';
     private COLLECTION_NAME: string = process.env.COLLECTION_NAME || 'gnani_collection';
 
     constructor() {
-        this.initializeChromaDB();
-        logger.info('VectorManager initialized.');
+        this.initialize();
+    }
+
+    private async initialize() {
+        await this.initializeChromaDB();
+        // Initialize embedding model in background to not block startup completely
+        this.initializeEmbeddingModel().catch(err => {
+            logger.error(`Background embedding model initialization failed: ${err.message}`);
+        });
+    }
+
+    private async initializeEmbeddingModel() {
+        try {
+            logger.info('Initializing embedding model (Xenova/all-MiniLM-L6-v2)...');
+            // Use feature-extraction task
+            this.embeddingPipeline = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+            logger.info('Embedding model loaded successfully.');
+        } catch (error: any) {
+            logger.error(`Failed to load embedding model: ${error.message}`);
+            this.embeddingPipeline = null;
+        }
     }
 
     async initializeChromaDB(): Promise<void> {
         try {
             const chromaDbUrl = `http://${this.VECTOR_DB_HOST}:${this.VECTOR_DB_PORT}`;
             this.client = new ChromaClient({ path: chromaDbUrl });
-            
-            await this.client.heartbeat();
-            logger.info(`ChromaDB client connected to ${chromaDbUrl}`);
+
+            // Heartbeat might fail if Chroma isn't running, but we shouldn't crash
+            try {
+                await this.client.heartbeat();
+                logger.info(`ChromaDB client connected to ${chromaDbUrl}`);
+            } catch (e) {
+                logger.warn(`ChromaDB heartbeat failed at ${chromaDbUrl}. Is the service running?`);
+            }
 
             this.collection = await this.client.getOrCreateCollection({ name: this.COLLECTION_NAME });
             logger.info(`ChromaDB collection '${this.COLLECTION_NAME}' ready.`);
@@ -40,6 +69,29 @@ class VectorManager {
         }
     }
 
+    /**
+     * Generate embeddings using the local model
+     */
+    async generateEmbedding(text: string): Promise<number[]> {
+        if (!this.embeddingPipeline) {
+            logger.warn('Embedding pipeline not initialized. Waiting 1s...');
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            if (!this.embeddingPipeline) {
+                logger.error('Embedding pipeline still not ready. Returning zero vector.');
+                return Array(384).fill(0); // all-MiniLM-L6-v2 dimension is 384
+            }
+        }
+
+        try {
+            // pooling: 'mean', normalize: true are standard for sentence embeddings
+            const output = await this.embeddingPipeline(text, { pooling: 'mean', normalize: true });
+            return Array.from(output.data);
+        } catch (error: any) {
+            logger.error(`Error generating embedding: ${error.message}`);
+            return Array(384).fill(0);
+        }
+    }
+
     async getRelevantEmbeddings(userId: string, query: string, topK = 3): Promise<string[]> {
         if (!this.collection) {
             logger.warn('ChromaDB not initialized. Cannot retrieve embeddings. Returning empty array.');
@@ -47,7 +99,7 @@ class VectorManager {
         }
 
         try {
-            const queryEmbedding = await getDummyEmbedding(query);
+            const queryEmbedding = await this.generateEmbedding(query);
 
             const results = await this.collection.query({
                 queryEmbeddings: [queryEmbedding],
@@ -74,7 +126,7 @@ class VectorManager {
         }
 
         try {
-            const embedding = await getDummyEmbedding(documentContent);
+            const embedding = await this.generateEmbedding(documentContent);
             await this.collection.add({
                 embeddings: [embedding],
                 metadatas: [{ userId: userId, ...metadata }],

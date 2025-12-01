@@ -11,6 +11,7 @@ import decayCalculator from './decay-calculator.js';
 import selfAdjuster from './self-adjuster.js';
 import performanceTracker from './performance-tracker.js';
 import budgetCalculator from './budget-calculator.js';
+import summarizationService from './summarization.service.js';
 
 interface MemoryContext {
     shortTermMessages: any[];
@@ -64,10 +65,10 @@ class MemoryManager {
         userId: string,
         sessionId: string,
         currentQuery: string,
-        tokenBudget?: number
+        tokenBudget?: number,
+        complexityScore?: number
     ): Promise<MemoryContext> {
         const startTime = Date.now();
-        const budget = tokenBudget || this.MAX_CONTEXT_TOKENS;
 
         try {
             // Parallel retrieval for better performance
@@ -81,6 +82,30 @@ class MemoryManager {
                 // 3. Get long-term memories (with timeout)
                 this.getLongTermMemories(userId, currentQuery)
             ]);
+
+            // PHASE 3: Calculate adaptive budget based on complexity and available memories
+            let budget = tokenBudget || this.MAX_CONTEXT_TOKENS;
+            if (complexityScore !== undefined) {
+                const totalMemories = shortTermMessages.messages.length + longTermMemories.length;
+
+                // Convert complexity score to QueryComplexity-like object
+                const queryComplexity = {
+                    score: complexityScore,
+                    category: this.categorizeComplexity(complexityScore),
+                    factors: []
+                };
+
+                const budgetCalc = budgetCalculator.calculateAdaptiveBudget(
+                    queryComplexity as any, // Type assertion since we're creating a compatible object
+                    shortTermMessages.messages.length, // conversation depth
+                    totalMemories
+                );
+                budget = budgetCalc.totalBudget;
+                this.logger.info(
+                    `Adaptive budget calculated: ${budget} tokens ` +
+                    `(complexity: ${complexityScore.toFixed(2)}, memories: ${totalMemories})`
+                );
+            }
 
             // 4. Rank and prioritize memories using hybrid RAG scoring
             const rankedMemories = this.rankMemoriesHybridRAG(
@@ -133,13 +158,33 @@ class MemoryManager {
     }
 
     /**
-     * Get short-term messages with caching
+     * Get short-term messages with caching and automatic summarization
      */
     private async getShortTermMessages(userId: string, sessionId: string): Promise<{ messages: any[], cacheHit: boolean }> {
         // Try cache first
         const cachedMessages = await sessionMemory.getCachedMessages(sessionId);
         if (cachedMessages && cachedMessages.length > 0) {
             this.logger.debug(`Cache HIT for session ${sessionId}`);
+
+            // Apply summarization if needed (even for cached messages)
+            if (summarizationService.needsSummarization(cachedMessages.length)) {
+                try {
+                    const summarizedMessages = await summarizationService.applySummarization(
+                        cachedMessages,
+                        userId,
+                        sessionId
+                    );
+
+                    // Update cache with summarized version
+                    await sessionMemory.cacheRecentMessages(sessionId, summarizedMessages);
+
+                    return { messages: summarizedMessages, cacheHit: true };
+                } catch (error: any) {
+                    this.logger.warn(`Summarization failed for cached messages: ${error.message}`);
+                    return { messages: cachedMessages, cacheHit: true };
+                }
+            }
+
             return { messages: cachedMessages, cacheHit: true };
         }
 
@@ -147,13 +192,28 @@ class MemoryManager {
         const messages = await shortTermMemory.getRecentMessages(userId, 20);
         const formattedMessages = this.formatMessages(messages);
 
+        // Apply summarization if needed
+        let finalMessages = formattedMessages;
+        if (summarizationService.needsSummarization(formattedMessages.length)) {
+            try {
+                finalMessages = await summarizationService.applySummarization(
+                    formattedMessages,
+                    userId,
+                    sessionId
+                );
+                this.logger.info(`Applied summarization: ${formattedMessages.length} → ${finalMessages.length} messages`);
+            } catch (error: any) {
+                this.logger.warn(`Summarization failed: ${error.message}, using original messages`);
+            }
+        }
+
         // Cache for next time
-        if (formattedMessages.length > 0) {
-            await sessionMemory.cacheRecentMessages(sessionId, formattedMessages);
+        if (finalMessages.length > 0) {
+            await sessionMemory.cacheRecentMessages(sessionId, finalMessages);
         }
 
         this.logger.debug(`Cache MISS for session ${sessionId}, loaded from MongoDB`);
-        return { messages: formattedMessages, cacheHit: false };
+        return { messages: finalMessages, cacheHit: false };
     }
 
     /**
@@ -544,6 +604,16 @@ class MemoryManager {
         // Clear cached messages for this session
         // Note: sessionMemory doesn't have clearCache, we'll just let Redis TTL handle it
         this.logger.debug(`Cleared cache for session ${sessionId}`);
+    }
+
+    /**
+     * Categorize complexity score into category
+     */
+    private categorizeComplexity(score: number): 'simple' | 'moderate' | 'complex' | 'very_complex' {
+        if (score < 0.3) return 'simple';
+        if (score < 0.6) return 'moderate';
+        if (score < 0.8) return 'complex';
+        return 'very_complex';
     }
 
     /**

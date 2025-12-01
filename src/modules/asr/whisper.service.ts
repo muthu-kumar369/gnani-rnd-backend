@@ -30,9 +30,11 @@ class WhisperService {
         this.initPythonProcess();
     }
 
+    private restartCount: number = 0;
+    private readonly MAX_RESTARTS: number = 5;
+
     initPythonProcess(): void {
         const pythonExecutable = WHISPER_PYTHON_PATH;
-
         const pythonScriptPath = path.join(process.cwd(), 'scripts', 'shell', 'whisper_runner.py');
 
         const args = [
@@ -43,41 +45,41 @@ class WhisperService {
             '--compute_type', WHISPER_COMPUTE_TYPE,
         ];
 
+        // We still want to log to file, but also listen to the stream
         const stderrFd = fs.openSync(this.pythonStderrLogFile, 'a');
+
         this.pythonProcess = spawn(pythonExecutable, args, {
             env: { ...process.env, 'VIRTUAL_ENV': path.join(process.cwd(), '.venv') },
-            stdio: ['pipe', 'pipe', stderrFd] // stdin, stdout, stderr redirected to file descriptor
+            stdio: ['pipe', 'pipe', 'pipe'] // Pipe stderr so we can read it
         });
 
-        if (this.pythonProcess) { // Check if pythonProcess is not null
+        if (this.pythonProcess) {
+            // Handle stdout
             if (this.pythonProcess.stdout) {
                 this.pythonProcess.stdout.on('data', (data: Buffer) => {
                     const message = data.toString().trim();
-                    this.logger.debug(`Whisper stdout: ${message}`);
-                    const parts = message.split(':');
-                    if (parts.length === 3) {
-                        const sessionId = parts[0];
-                        const transcript = parts[1];
-                        const isFinal = parts[2] === 'true';
+                    // this.logger.debug(`Whisper stdout: ${message}`); // Too noisy
 
-                        this.logger.debug(`Transcribed Text for session ${sessionId}: '${transcript}' (isFinal: ${isFinal})`); // Log the transcribed text
+                    // Robust parsing: sessionId:transcript:isFinal
+                    // Regex: ^([^:]+):(.*):(true|false)$
+                    // This allows colons in the transcript
+                    const match = message.match(/^([^:]+):(.*):(true|false)$/);
 
-                        // If transcription is empty, log a warning
+                    if (match) {
+                        const sessionId = match[1];
+                        const transcript = match[2];
+                        const isFinal = match[3] === 'true';
+
+                        this.logger.debug(`Transcribed Text for session ${sessionId}: '${transcript}' (isFinal: ${isFinal})`);
+
                         if (!transcript.trim()) {
-                            this.logger.warn(`Empty transcription received for session ${sessionId}.`);
-                            auditService.logWhisperEvent(null, sessionId, message, transcript, 'warning', 'Empty transcription');
-                            
-                            // CRITICAL FIX: If it's not final, we can skip. But if it IS final, we MUST call the callback
-                            // to resolve the promise in finalizeSessionProcessing.
-                            if (!isFinal) {
-                                return;
-                            }
+                            if (!isFinal) return; // Skip empty partials
+                            this.logger.warn(`Empty final transcription for session ${sessionId}.`);
                         }
 
                         const callback = this.transcriptionCallbacks.get(sessionId);
                         if (callback) {
                             callback(transcript, isFinal);
-                            auditService.logWhisperEvent(null, sessionId, message, transcript, 'info', null);
                             if (isFinal) {
                                 metrics.incWhisperTranscription(sessionId, 'success');
                             }
@@ -85,26 +87,53 @@ class WhisperService {
                     } else if (message.startsWith('ERROR:')) {
                         this.logger.error(`Whisper process error: ${message}`);
                         auditService.logWhisperEvent(null, null, message, null, 'failure', message);
+                    } else if (message === 'ACK') {
+                        // Ignore ACK
+                    } else {
+                        // Log unexpected format but don't crash
+                        // this.logger.warn(`Unexpected Whisper output format: ${message}`);
+                    }
+                });
+            }
+
+            // Handle stderr
+            if (this.pythonProcess.stderr) {
+                this.pythonProcess.stderr.on('data', (data: Buffer) => {
+                    const errorMsg = data.toString();
+                    // Write to log file manually since we are piping
+                    fs.writeSync(stderrFd, data);
+
+                    this.logger.error(`Whisper stderr: ${errorMsg}`);
+
+                    // Detect critical errors
+                    if (errorMsg.includes('Traceback') || errorMsg.includes('Error:')) {
+                        auditService.logWhisperEvent(null, null, errorMsg, null, 'failure', 'Whisper Python Error');
                     }
                 });
             }
 
             this.pythonProcess.on('close', (code: number) => {
-                this.logger.warn(`Whisper Python process exited with code ${code}. Check ${this.pythonStderrLogFile} for details.`);
+                this.logger.warn(`Whisper Python process exited with code ${code}.`);
                 this.pythonProcess = null;
-                auditService.logWhisperEvent(null, null, '', null, 'warning', `Whisper process exited with code ${code}`);
-                setTimeout(() => this.initPythonProcess(), 5000);
+                fs.closeSync(stderrFd);
+
+                if (this.restartCount < this.MAX_RESTARTS) {
+                    this.restartCount++;
+                    const delay = 5000 * this.restartCount; // Exponential backoff
+                    this.logger.info(`Restarting Whisper process in ${delay}ms (Attempt ${this.restartCount}/${this.MAX_RESTARTS})...`);
+                    setTimeout(() => this.initPythonProcess(), delay);
+                } else {
+                    this.logger.error('Max restart attempts reached for Whisper process. Manual intervention required.');
+                    auditService.logEvent('WHISPER_SERVICE_FATAL', null, null, { reason: 'Max restarts reached' }, 'failure');
+                }
             });
 
             this.pythonProcess.on('error', (err: Error) => {
-                this.logger.error(`Failed to start Whisper Python process: ${err.message}. Check ${this.pythonStderrLogFile} for details.`);
+                this.logger.error(`Failed to start Whisper Python process: ${err.message}`);
                 this.pythonProcess = null;
-                auditService.logWhisperEvent(null, null, '', null, 'failure', `Failed to start Whisper process: ${err.message}`);
-                setTimeout(() => this.initPythonProcess(), 5000);
+                fs.closeSync(stderrFd);
             });
-
-
-        } // End if (this.pythonProcess)
+        }
 
         this.logger.info('Whisper Python process initialized.');
         auditService.logEvent('WHISPER_SERVICE_INIT', null, null, {}, 'success');
@@ -125,7 +154,7 @@ class WhisperService {
         const audioData = audioChunk; // audioChunk is already a Buffer
 
         this.logger.info(`Sending audio chunk to Whisper. Session: ${sessionId}, isLast: ${isLastChunk}, Raw data length: ${audioData.length}, First 50 chars: ${audioData.slice(0, 50).toString('hex')}...`);
-        
+
         if (this.pythonProcess.stdin) {
             // Send header length as 4-byte binary integer
             const headerLengthBuffer = Buffer.alloc(4);

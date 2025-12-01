@@ -12,6 +12,8 @@ import llmService from '../llm/llm.service.js';
 import llmResponseParser from '../llm/llm-response.parser.js';
 import ttsService from '../tts/tts.service.js';
 import audioStreamer from '../../utils/audio.streamer.js';
+import toolRegistry from '../tools/tool.registry.js';
+import sessionMemory from '../memory/services/session-memory.service.js';
 import { Logger } from 'winston';
 
 interface Session {
@@ -39,9 +41,11 @@ class SessionManager {
         metrics.activeSessionsGauge.set(0);
     }
 
-    startSession(userId: string, onTranscriptionCallback: (transcript: string, isFinal: boolean) => void, onLlmChunkCallback?: (text: string) => void): string {
+    async startSession(userId: string, onTranscriptionCallback: (transcript: string, isFinal: boolean) => void, onLlmChunkCallback?: (text: string) => void): Promise<string> {
         const sessionId = uuidv4();
         this.logger.debug(`Generated new session ID: ${sessionId}`);
+
+        // Initialize in-memory session
         this.sessions.set(sessionId, {
             userId,
             audioBuffer: [],
@@ -52,10 +56,23 @@ class SessionManager {
             metadata: {},
             currentTranscription: ''
         });
+
+        // Persist initial state to Redis
+        try {
+            await sessionMemory.setSessionState(sessionId, {
+                userId,
+                lastActivity: Date.now(),
+                isSpeaking: false
+            });
+        } catch (error: any) {
+            this.logger.error(`Failed to persist session state to Redis: ${error.message}`);
+        }
+
         this.resetSessionTimeout(sessionId);
         this.logger.info(`Session started: ${sessionId} for user ${userId}`);
         metrics.activeSessionsGauge.inc();
         auditService.logEvent('SESSION_START', userId, sessionId, {}, 'success');
+
         return sessionId;
     }
 
@@ -72,6 +89,12 @@ class SessionManager {
         if (session) {
             session.lastActivity = Date.now();
             this.resetSessionTimeout(sessionId);
+
+            // Update Redis state (fire and forget to avoid latency)
+            sessionMemory.updateSessionState(sessionId, {
+                lastActivity: Date.now(),
+                isSpeaking: true
+            }).catch(err => this.logger.error(`Failed to update Redis session state: ${err.message}`));
 
             session.audioBuffer.push(audioChunk); // Directly push the audioChunk
 
@@ -110,15 +133,20 @@ class SessionManager {
             ttsService.cleanupSession(sessionId);
             audioStreamer.cleanupSession(sessionId);
 
-            // Clean up memory system caches
+            // Clean up memory system caches and Redis session state
             import('../memory/memory.manager.js').then(module => {
                 module.default.clearSessionCache(sessionId).catch((err: any) => {
                     this.logger.error(`Error clearing session memory: ${err.message}`);
                 });
             });
 
+            // Clear Redis state
+            sessionMemory.clearSessionCache(sessionId).catch(err =>
+                this.logger.error(`Failed to clear Redis session cache: ${err.message}`)
+            );
+
             this.logger.info(`Session ended: ${sessionId}`);
-            metrics.activeSessionsGauge.inc();
+            metrics.activeSessionsGauge.dec(); // Corrected from inc() to dec()
             auditService.logEvent('SESSION_END', session.userId, sessionId, {}, 'success');
             return true;
         }
@@ -200,6 +228,12 @@ class SessionManager {
         session.lastActivity = Date.now();
         this.resetSessionTimeout(sessionId);
 
+        // Update Redis state
+        sessionMemory.updateSessionState(sessionId, {
+            lastActivity: Date.now(),
+            isSpeaking: false
+        }).catch(err => this.logger.error(`Failed to update Redis session state: ${err.message}`));
+
         // Notify callback about the input (simulating STT result)
         if (session.onTranscriptionCallback) {
             session.onTranscriptionCallback(textInput, true);
@@ -218,80 +252,88 @@ class SessionManager {
             textInput
         );
 
+        // --- INTEGRATED TOOL ROUTING (PHASE 2) ---
+
+        // 1. Get available tools
+        const toolDefinitions = toolRegistry.getToolDefinitions();
+
+        // 2. Build Prompt with Tools
         const llmPrompt = await contextEngine.buildLLMPrompt(
             sessionId,
             session.userId,
-            processedQuery
+            processedQuery,
+            toolDefinitions // Pass tools to prompt
         );
-
-        // --- TOOL LAYER START ---
-        // 1. Check if a tool is needed
-
-        let toolResult = null;
-        try {
-            // Use dynamic import for tool registry to avoid circular dependency issues if any, 
-            // or just use the top-level import if I add it. 
-            // Let's use top-level import, but I need to add it.
-            // For now, I will assume I added it to the top.
-            // Wait, I can't easily add to top with replace_file_content unless I target line 1.
-            // I'll use dynamic import here as it's safer for now without touching top of file.
-            const toolRegistryModule = await import('../tools/index.js');
-            const toolRegistry = toolRegistryModule.default;
-
-            const toolDefinitions = toolRegistry.getToolDefinitions();
-            console.log(`[ToolLayer] Loaded ${toolDefinitions.length} tools: ${toolDefinitions.map((t: any) => t.name).join(', ')}`);
-
-            const decisionPrompt = contextEngine.buildToolDecisionPrompt(
-                toolDefinitions,
-                processedQuery.cleanedText,
-                sessionId
-            );
-
-            console.log(`[ToolLayer] Requesting decision for query: "${processedQuery.cleanedText}"`);
-            const decision = await llmService.getToolDecision(decisionPrompt);
-            console.log(`[ToolLayer] Decision: ${JSON.stringify(decision)}`);
-
-            if (decision.needs_tool && decision.tool_name) {
-                this.logger.info(`Tool execution triggered: ${decision.tool_name}`);
-                console.log(`[ToolLayer] Executing tool: ${decision.tool_name} with params: ${JSON.stringify(decision.parameters)}`);
-                // 2. Execute the tool
-                const result = await toolRegistry.executeTool(decision.tool_name, decision.parameters);
-                toolResult = result;
-                this.logger.info(`Tool execution result: ${JSON.stringify(result)}`);
-                console.log(`[ToolLayer] Tool Result: ${JSON.stringify(result)}`);
-
-                // 3. Enrich the prompt with tool result
-                contextEngine.enrichPromptWithToolResult(llmPrompt, toolResult);
-            } else {
-                console.log(`[ToolLayer] No tool needed.`);
-            }
-        } catch (toolError: any) {
-            this.logger.error(`Tool layer error: ${toolError.message}`);
-            console.error(`[ToolLayer] Error: ${toolError.message}`);
-            // Continue without tool (fallback to normal LLM)
-        }
-        // --- TOOL LAYER END ---
 
         let llmResponseText = '';
         let actionDirective = null;
+        let currentPrompt = llmPrompt;
+        let turnCount = 0;
+        const MAX_TURNS = 5;
 
-        this.logger.info(`Sending prompt to LLM for session ${sessionId}: ${JSON.stringify(llmPrompt)}`);
-        try {
-            const llmRawResponse = await llmService.getLlmResponse(llmPrompt, (partialResponse: any) => {
-                if (session.onLlmChunkCallback) {
-                    // Pass the full object (type + text)
-                    session.onLlmChunkCallback(partialResponse);
+        this.logger.info(`Starting Re-Act loop for session ${sessionId}`);
+
+        while (turnCount < MAX_TURNS) {
+            turnCount++;
+            this.logger.debug(`Re-Act Turn ${turnCount}/${MAX_TURNS}`);
+
+            try {
+                const llmRawResponse = await llmService.getLlmResponse(currentPrompt, (partialResponse: any) => {
+                    if (session.onLlmChunkCallback) {
+                        session.onLlmChunkCallback(partialResponse);
+                    }
+                });
+
+                const trimmedResponse = llmRawResponse.text.trim();
+                let toolCall = null;
+
+                // Check for Tool Call (JSON detection)
+                if (trimmedResponse.startsWith('{') && trimmedResponse.includes('"tool"')) {
+                    try {
+                        const parsed = JSON.parse(trimmedResponse);
+                        if (parsed.tool && parsed.params) {
+                            toolCall = parsed;
+                        }
+                    } catch (e) {
+                        this.logger.warn(`Failed to parse potential tool call: ${e}. Treating as text.`);
+                    }
                 }
-            });
-            const parsedLlmResponse = llmResponseParser.parse(llmRawResponse);
-            llmResponseText = parsedLlmResponse.textResponse;
-            actionDirective = parsedLlmResponse.actionInstructions;
-            auditService.logLlmEvent(session.userId, sessionId, llmPrompt, llmRawResponse, 'success');
-        } catch (llmError: any) {
-            this.logger.error(`Error during LLM call for session ${sessionId}: ${llmError.message}`);
-            auditService.logLlmEvent(session.userId, sessionId, llmPrompt, null, 'failure', llmError.message);
-            llmResponseText = "I'm sorry, I encountered an error while processing your request.";
+
+                if (toolCall) {
+                    this.logger.info(`Tool execution triggered: ${toolCall.tool}`);
+                    console.log(`[ToolLayer] Executing tool: ${toolCall.tool}`);
+
+                    // Execute Tool
+                    const result = await toolRegistry.executeTool(toolCall.tool, toolCall.params);
+                    this.logger.info(`Tool execution result: ${JSON.stringify(result)}`);
+
+                    // Enrich prompt with result for next turn
+                    currentPrompt = contextEngine.enrichPromptWithToolResult(currentPrompt, result);
+
+                    // Continue loop to get next LLM response
+                    continue;
+                } else {
+                    // Final Response (No tool needed)
+                    const parsed = llmResponseParser.parse(llmRawResponse);
+                    llmResponseText = parsed.textResponse;
+                    actionDirective = parsed.actionInstructions;
+                    break; // Exit loop
+                }
+
+            } catch (llmError: any) {
+                this.logger.error(`Error during LLM call for session ${sessionId}: ${llmError.message}`);
+                auditService.logLlmEvent(session.userId, sessionId, currentPrompt, null, 'failure', llmError.message);
+                llmResponseText = "I'm sorry, I encountered an error while processing your request.";
+                break;
+            }
         }
+
+        if (turnCount >= MAX_TURNS) {
+            this.logger.warn(`Re-Act loop reached max turns (${MAX_TURNS}) for session ${sessionId}`);
+            llmResponseText = "I'm sorry, I'm having trouble completing this request. It seems a bit too complex.";
+        }
+
+        auditService.logLlmEvent(session.userId, sessionId, currentPrompt, { text: llmResponseText }, 'success');
 
         if (actionDirective && actionDirective.action) {
             this.logger.info(`Attempting to dispatch action for session ${sessionId}: ${JSON.stringify(actionDirective)}`);

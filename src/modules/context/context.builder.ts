@@ -8,17 +8,18 @@ class ContextBuilder {
         logger.info('ContextBuilder initialized.');
     }
 
-    async buildContext(userId: string, sessionId: string, currentQuery: string, tokenBudget = 4000): Promise<any> {
+    async buildContext(userId: string, sessionId: string, currentQuery: string, tokenBudget = 4000, complexityScore?: number): Promise<any> {
         logger.debug(`Building context for session ${sessionId}, user ${userId}. Query: "${currentQuery}"`);
 
         const userSettings = await settingsManager.getUserSettings(userId);
-        
+
         // Use unified memory manager to get all context
         const memoryContext = await memoryManager.getContextForPrompt(
             userId,
             sessionId,
             currentQuery,
-            tokenBudget
+            tokenBudget,
+            complexityScore
         );
 
         return {
