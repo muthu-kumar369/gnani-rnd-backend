@@ -25,10 +25,10 @@ const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
 const gnani_proto = grpc.loadPackageDefinition(packageDefinition).gnani as any;
 
 // Implement gRPC service methods
-const StartSession = (
+const StartSession = async (
   call: grpc.ServerUnaryCall<any, any>,
   callback: grpc.sendUnaryData<any>
-): void => {
+): Promise<void> => {
   logger.info("StartSession received call.request:", call.request);
   logger.info("StartSession received call.metadata:", call.metadata);
 
@@ -42,7 +42,7 @@ const StartSession = (
       );
     };
 
-    const newSessionId = sessionManager.startSession(
+    const newSessionId = await sessionManager.startSession(
       user_id,
       onTranscriptionCallback,
       undefined // onLlmChunkCallback not used for StartSession

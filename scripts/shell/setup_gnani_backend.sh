@@ -53,6 +53,16 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# --- 4b. Setup TEI (Embedding Service) ---
+echo ""
+echo "--- Step 4b/5: Setting up TEI (Text Embeddings Inference) ---"
+chmod +x scripts/shell/setup_tei.sh
+scripts/shell/setup_tei.sh
+if [ $? -ne 0 ]; then
+    echo "Error: TEI setup failed. Exiting."
+    exit 1
+fi
+
 # --- 5. Verify Setup ---
 echo ""
 echo "--- Step 5/5: Verifying GNANI Backend Setup ---"
