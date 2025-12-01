@@ -109,14 +109,14 @@ class SessionManager {
             queryProcessor.clearSessionMemory(sessionId);
             ttsService.cleanupSession(sessionId);
             audioStreamer.cleanupSession(sessionId);
-            
+
             // Clean up memory system caches
             import('../memory/memory.manager.js').then(module => {
-                module.default.clearSessionMemory(sessionId).catch((err: any) => {
+                module.default.clearSessionCache(sessionId).catch((err: any) => {
                     this.logger.error(`Error clearing session memory: ${err.message}`);
                 });
             });
-            
+
             this.logger.info(`Session ended: ${sessionId}`);
             metrics.activeSessionsGauge.inc();
             auditService.logEvent('SESSION_END', session.userId, sessionId, {}, 'success');
@@ -226,7 +226,7 @@ class SessionManager {
 
         // --- TOOL LAYER START ---
         // 1. Check if a tool is needed
-        
+
         let toolResult = null;
         try {
             // Use dynamic import for tool registry to avoid circular dependency issues if any, 
@@ -246,11 +246,11 @@ class SessionManager {
                 processedQuery.cleanedText,
                 sessionId
             );
-            
+
             console.log(`[ToolLayer] Requesting decision for query: "${processedQuery.cleanedText}"`);
             const decision = await llmService.getToolDecision(decisionPrompt);
             console.log(`[ToolLayer] Decision: ${JSON.stringify(decision)}`);
-            
+
             if (decision.needs_tool && decision.tool_name) {
                 this.logger.info(`Tool execution triggered: ${decision.tool_name}`);
                 console.log(`[ToolLayer] Executing tool: ${decision.tool_name} with params: ${JSON.stringify(decision.parameters)}`);
@@ -259,7 +259,7 @@ class SessionManager {
                 toolResult = result;
                 this.logger.info(`Tool execution result: ${JSON.stringify(result)}`);
                 console.log(`[ToolLayer] Tool Result: ${JSON.stringify(result)}`);
-                
+
                 // 3. Enrich the prompt with tool result
                 contextEngine.enrichPromptWithToolResult(llmPrompt, toolResult);
             } else {

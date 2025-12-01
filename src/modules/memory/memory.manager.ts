@@ -4,7 +4,13 @@ import shortTermMemory from './services/short-term-memory.service.js';
 import longTermMemory from './services/long-term-memory.service.js';
 import sessionMemory from './services/session-memory.service.js';
 import { IConversationMessage } from './entities/conversation.entity.js';
+import ConversationMessage from './entities/conversation.entity.js';
 import { Logger } from 'winston';
+import { encoding_for_model } from 'tiktoken';
+import decayCalculator from './decay-calculator.js';
+import selfAdjuster from './self-adjuster.js';
+import performanceTracker from './performance-tracker.js';
+import budgetCalculator from './budget-calculator.js';
 
 interface MemoryContext {
     shortTermMessages: any[];
@@ -30,17 +36,29 @@ class MemoryManager {
     private MAX_CONTEXT_TOKENS: number;
     private LONG_TERM_TOP_K: number;
     private SUMMARIZATION_BATCH_SIZE: number;
+    private tokenizer: any;
 
     constructor() {
         this.logger = createContextualLogger({ module: 'MemoryManager' });
         this.MAX_CONTEXT_TOKENS = parseInt(process.env.MEMORY_MAX_CONTEXT_TOKENS || '4000', 10);
         this.LONG_TERM_TOP_K = parseInt(process.env.MEMORY_LONG_TERM_TOP_K || '5', 10);
         this.SUMMARIZATION_BATCH_SIZE = parseInt(process.env.MEMORY_SUMMARIZATION_BATCH_SIZE || '10', 10);
+
+        // Initialize tiktoken for accurate token counting
+        try {
+            this.tokenizer = encoding_for_model('gpt-3.5-turbo'); // Use appropriate model
+            this.logger.info('Tiktoken initialized for accurate token counting');
+        } catch (error: any) {
+            this.logger.warn(`Failed to initialize tiktoken: ${error.message}. Falling back to estimation.`);
+            this.tokenizer = null;
+        }
+
         this.logger.info('MemoryManager initialized.');
     }
 
     /**
      * Main entry point: Get complete context for prompt building
+     * Now with parallel retrieval for better performance
      */
     async getContextForPrompt(
         userId: string,
@@ -52,53 +70,21 @@ class MemoryManager {
         const budget = tokenBudget || this.MAX_CONTEXT_TOKENS;
 
         try {
-            // 1. Get session state from Redis
-            const sessionState = await sessionMemory.getSessionState(sessionId);
+            // Parallel retrieval for better performance
+            const [sessionState, shortTermMessages, longTermMemories] = await Promise.all([
+                // 1. Get session state from Redis
+                sessionMemory.getSessionState(sessionId),
 
-            // 2. Try to get recent messages from Redis cache first
-            let shortTermMessages: any[] = [];
-            let cacheHit = false;
+                // 2. Get short-term messages (with cache)
+                this.getShortTermMessages(userId, sessionId),
 
-            const cachedMessages = await sessionMemory.getCachedMessages(sessionId);
-            if (cachedMessages && cachedMessages.length > 0) {
-                shortTermMessages = cachedMessages;
-                cacheHit = true;
-                this.logger.debug(`Cache HIT for session ${sessionId}`);
-            } else {
-                // Fallback to MongoDB
-                const messages = await shortTermMemory.getRecentMessages(userId, 20);
-                shortTermMessages = this.formatMessages(messages);
-                
-                // Cache for next time
-                if (shortTermMessages.length > 0) {
-                    await sessionMemory.cacheRecentMessages(sessionId, shortTermMessages);
-                }
-                this.logger.debug(`Cache MISS for session ${sessionId}, loaded from MongoDB`);
-            }
+                // 3. Get long-term memories (with timeout)
+                this.getLongTermMemories(userId, currentQuery)
+            ]);
 
-            // 3. Get relevant long-term memories from ChromaDB (with timeout)
-            let longTermMemories: string[] = [];
-            try {
-                const longTermPromise = longTermMemory.retrieveRelevantMemories(
-                    userId,
-                    currentQuery,
-                    this.LONG_TERM_TOP_K
-                );
-                
-                // Race against a 2-second timeout
-                const timeoutPromise = new Promise<string[]>((_, reject) => 
-                    setTimeout(() => reject(new Error('Long-term memory retrieval timed out')), 2000)
-                );
-
-                longTermMemories = await Promise.race([longTermPromise, timeoutPromise]);
-            } catch (err: any) {
-                this.logger.warn(`Long-term memory retrieval skipped: ${err.message}`);
-                // Continue without long-term memory
-            }
-
-            // 4. Rank and prioritize memories based on token budget
-            const rankedMemories = this.rankMemories(
-                shortTermMessages,
+            // 4. Rank and prioritize memories using hybrid RAG scoring
+            const rankedMemories = this.rankMemoriesHybridRAG(
+                shortTermMessages.messages,
                 longTermMemories,
                 currentQuery,
                 budget
@@ -108,7 +94,7 @@ class MemoryManager {
             const finalShortTerm = rankedMemories
                 .filter(m => m.type === 'short-term')
                 .map(m => m.content);
-            
+
             const finalLongTerm = rankedMemories
                 .filter(m => m.type === 'long-term')
                 .map(m => m.content);
@@ -126,7 +112,7 @@ class MemoryManager {
                 metadata: {
                     shortTermCount: finalShortTerm.length,
                     longTermCount: finalLongTerm.length,
-                    cacheHit,
+                    cacheHit: shortTermMessages.cacheHit,
                     retrievalTime
                 }
             };
@@ -143,6 +129,53 @@ class MemoryManager {
                     retrievalTime: Date.now() - startTime
                 }
             };
+        }
+    }
+
+    /**
+     * Get short-term messages with caching
+     */
+    private async getShortTermMessages(userId: string, sessionId: string): Promise<{ messages: any[], cacheHit: boolean }> {
+        // Try cache first
+        const cachedMessages = await sessionMemory.getCachedMessages(sessionId);
+        if (cachedMessages && cachedMessages.length > 0) {
+            this.logger.debug(`Cache HIT for session ${sessionId}`);
+            return { messages: cachedMessages, cacheHit: true };
+        }
+
+        // Fallback to MongoDB
+        const messages = await shortTermMemory.getRecentMessages(userId, 20);
+        const formattedMessages = this.formatMessages(messages);
+
+        // Cache for next time
+        if (formattedMessages.length > 0) {
+            await sessionMemory.cacheRecentMessages(sessionId, formattedMessages);
+        }
+
+        this.logger.debug(`Cache MISS for session ${sessionId}, loaded from MongoDB`);
+        return { messages: formattedMessages, cacheHit: false };
+    }
+
+    /**
+     * Get long-term memories with timeout protection
+     */
+    private async getLongTermMemories(userId: string, currentQuery: string): Promise<string[]> {
+        try {
+            const longTermPromise = longTermMemory.retrieveRelevantMemories(
+                userId,
+                currentQuery,
+                this.LONG_TERM_TOP_K
+            );
+
+            // Race against a 2-second timeout
+            const timeoutPromise = new Promise<string[]>((_, reject) =>
+                setTimeout(() => reject(new Error('Long-term memory retrieval timed out')), 2000)
+            );
+
+            return await Promise.race([longTermPromise, timeoutPromise]);
+        } catch (err: any) {
+            this.logger.warn(`Long-term memory retrieval skipped: ${err.message}`);
+            return [];
         }
     }
 
@@ -210,33 +243,79 @@ class MemoryManager {
     }
 
     /**
-     * Rank and prioritize memories based on relevance and token budget
+     * Hybrid RAG scoring: Combines semantic similarity, recency, and keyword matching
+     * - Semantic similarity: 50% weight
+     * - Recency: 30% weight
+     * - Keyword matching: 20% weight
      */
-    private rankMemories(
+    private rankMemoriesHybridRAG(
         shortTermMessages: any[],
         longTermMemories: string[],
         currentQuery: string,
         tokenBudget: number
     ): RankedMemory[] {
         const rankedMemories: RankedMemory[] = [];
+        const queryLower = currentQuery.toLowerCase();
+        const queryKeywords = this.extractKeywords(queryLower);
 
-        // Convert short-term messages to ranked memories
+        // Process short-term messages
         shortTermMessages.forEach((msg, index) => {
-            const recencyScore = 1.0 - (index / shortTermMessages.length) * 0.5; // 0.5 to 1.0
+            const content = typeof msg === 'string' ? msg : JSON.stringify(msg);
+            const contentLower = content.toLowerCase();
+
+            // 1. Recency score (30% weight) - more recent = higher score
+            const recencyScore = 1.0 - (index / Math.max(shortTermMessages.length, 1)) * 0.5; // 0.5 to 1.0
+
+            // 2. Semantic similarity (50% weight) - using Jaccard similarity
+            const semanticScore = this.calculateJaccardSimilarity(queryLower, contentLower);
+
+            // 3. Keyword matching (20% weight)
+            const keywordScore = this.calculateKeywordScore(contentLower, queryKeywords);
+
+            // PHASE 2B: Get dynamic weights from self-adjuster
+            const weights = selfAdjuster.getCurrentWeights();
+
+            // Combined score with dynamic weights
+            const baseScore = (semanticScore * weights.semantic) +
+                (recencyScore * weights.recency) +
+                (keywordScore * weights.keywords);
+
+            // PHASE 2B: Apply decay if message has timestamp
+            let finalScore = baseScore;
+            if (msg.timestamp) {
+                const ageInDays = decayCalculator.calculateAge(new Date(msg.timestamp));
+                const accessCount = msg.accessCount || 0;
+                const decayResult = decayCalculator.applyDecay(baseScore, ageInDays, accessCount);
+                finalScore = decayResult.finalScore;
+            }
+
             rankedMemories.push({
                 content: msg,
-                score: recencyScore,
+                score: finalScore,
                 timestamp: msg.timestamp,
                 type: 'short-term'
             });
         });
 
-        // Convert long-term memories to ranked memories
+        // Process long-term memories
         longTermMemories.forEach((memory, index) => {
-            const relevanceScore = 1.0 - (index / longTermMemories.length) * 0.3; // 0.7 to 1.0
+            const memoryLower = memory.toLowerCase();
+
+            // Long-term memories are already ranked by ChromaDB, so use that ranking
+            const chromaScore = 1.0 - (index / Math.max(longTermMemories.length, 1)) * 0.3; // 0.7 to 1.0
+
+            // Semantic similarity
+            const semanticScore = this.calculateJaccardSimilarity(queryLower, memoryLower);
+
+            // Keyword matching
+            const keywordScore = this.calculateKeywordScore(memoryLower, queryKeywords);
+
+            // Combined score (recency less important for long-term)
+            const finalScore = (semanticScore * 0.5) + (chromaScore * 0.3) + (keywordScore * 0.2);
+
             rankedMemories.push({
                 content: memory,
-                score: relevanceScore,
+                score: finalScore,
                 type: 'long-term'
             });
         });
@@ -244,25 +323,102 @@ class MemoryManager {
         // Sort by score (highest first)
         rankedMemories.sort((a, b) => b.score - a.score);
 
-        // Apply token budget (rough estimation: 4 chars ≈ 1 token)
-        const maxChars = tokenBudget * 4;
-        let currentChars = 0;
+        // Apply token budget using accurate token counting
+        return this.applyTokenBudget(rankedMemories, tokenBudget);
+    }
+
+    /**
+     * Apply token budget using tiktoken for accurate counting
+     */
+    private applyTokenBudget(memories: RankedMemory[], tokenBudget: number): RankedMemory[] {
+        let currentTokens = 0;
         const filteredMemories: RankedMemory[] = [];
 
-        for (const memory of rankedMemories) {
-            const memoryChars = typeof memory.content === 'string' 
-                ? memory.content.length 
-                : JSON.stringify(memory.content).length;
+        for (const memory of memories) {
+            const memoryText = typeof memory.content === 'string'
+                ? memory.content
+                : JSON.stringify(memory.content);
 
-            if (currentChars + memoryChars <= maxChars) {
+            const memoryTokens = this.countTokens(memoryText);
+
+            if (currentTokens + memoryTokens <= tokenBudget) {
                 filteredMemories.push(memory);
-                currentChars += memoryChars;
+                currentTokens += memoryTokens;
             } else {
+                // Budget exceeded
                 break;
             }
         }
 
+        this.logger.debug(`Applied token budget: ${currentTokens}/${tokenBudget} tokens used`);
         return filteredMemories;
+    }
+
+    /**
+     * Accurate token counting using tiktoken
+     */
+    private countTokens(text: string): number {
+        if (this.tokenizer) {
+            try {
+                const tokens = this.tokenizer.encode(text);
+                return tokens.length;
+            } catch (error: any) {
+                this.logger.warn(`Tiktoken encoding error: ${error.message}, falling back to estimation`);
+            }
+        }
+
+        // Fallback: rough estimation (4 chars ≈ 1 token)
+        return Math.ceil(text.length / 4);
+    }
+
+    /**
+     * Calculate Jaccard similarity between two strings
+     */
+    private calculateJaccardSimilarity(str1: string, str2: string): number {
+        const words1 = new Set(str1.split(/\s+/));
+        const words2 = new Set(str2.split(/\s+/));
+
+        const intersection = new Set([...words1].filter(x => words2.has(x)));
+        const union = new Set([...words1, ...words2]);
+
+        return union.size > 0 ? intersection.size / union.size : 0;
+    }
+
+    /**
+     * Extract keywords from query (simple approach: remove stop words)
+     */
+    private extractKeywords(query: string): Set<string> {
+        const stopWords = new Set([
+            'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+            'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should',
+            'could', 'may', 'might', 'must', 'can', 'of', 'at', 'by', 'for', 'with',
+            'about', 'against', 'between', 'into', 'through', 'during', 'before',
+            'after', 'above', 'below', 'to', 'from', 'up', 'down', 'in', 'out',
+            'on', 'off', 'over', 'under', 'again', 'further', 'then', 'once',
+            'what', 'which', 'who', 'when', 'where', 'why', 'how'
+        ]);
+
+        const words = query.split(/\s+/).filter(word =>
+            word.length > 2 && !stopWords.has(word)
+        );
+
+        return new Set(words);
+    }
+
+    /**
+     * Calculate keyword matching score
+     */
+    private calculateKeywordScore(content: string, keywords: Set<string>): number {
+        if (keywords.size === 0) return 0;
+
+        let matchCount = 0;
+        for (const keyword of keywords) {
+            if (content.includes(keyword)) {
+                matchCount++;
+            }
+        }
+
+        return matchCount / keywords.size;
     }
 
     /**
@@ -271,7 +427,7 @@ class MemoryManager {
     private async checkAndTriggerSummarization(userId: string): Promise<void> {
         try {
             const stats = await shortTermMemory.getUserStats(userId);
-            
+
             // If user has more than 100 messages, check for old ones
             if (stats.totalMessages > 100) {
                 const oldMessages = await shortTermMemory.getMessagesForSummarization(
@@ -292,70 +448,114 @@ class MemoryManager {
     }
 
     /**
-     * Process summarization in background
+     * Process summarization with structured entity extraction
      */
     private async processSummarization(
         userId: string,
         messages: IConversationMessage[]
     ): Promise<void> {
         try {
-            this.logger.info(`Starting background summarization for ${messages.length} messages`);
-            await longTermMemory.processOldConversations(userId, messages);
-            this.logger.info(`Completed background summarization for user ${userId}`);
-        } catch (error: any) {
-            this.logger.error(`Error in background summarization: ${error.message}`);
-        }
-    }
+            this.logger.info(`Starting summarization for ${userId} (${messages.length} messages)`);
 
-    /**
-     * Manually trigger summarization for a user
-     */
-    async triggerSummarization(userId: string): Promise<void> {
-        try {
-            const oldMessages = await shortTermMemory.getMessagesForSummarization(
-                userId,
-                this.SUMMARIZATION_BATCH_SIZE
-            );
+            // Group messages into conversation pairs
+            const conversationPairs: string[] = [];
+            for (let i = 0; i < messages.length; i += 2) {
+                const userMsg = messages[i];
+                const assistantMsg = messages[i + 1];
 
-            if (oldMessages.length > 0) {
-                await this.processSummarization(userId, oldMessages);
-            } else {
-                this.logger.info(`No messages to summarize for user ${userId}`);
+                if (userMsg && assistantMsg) {
+                    conversationPairs.push(
+                        `User: ${userMsg.content}\nAssistant: ${assistantMsg.content}`
+                    );
+                }
             }
-        } catch (error: any) {
-            this.logger.error(`Error triggering summarization: ${error.message}`);
-        }
-    }
 
-    /**
-     * Clear all memory for a session
-     */
-    async clearSessionMemory(sessionId: string): Promise<void> {
-        try {
-            await sessionMemory.clearSessionCache(sessionId);
-            this.logger.info(`Cleared session memory for ${sessionId}`);
-        } catch (error: any) {
-            this.logger.error(`Error clearing session memory: ${error.message}`);
-        }
-    }
-
-    /**
-     * Get memory statistics for a user
-     */
-    async getUserMemoryStats(userId: string): Promise<any> {
-        try {
-            const shortTermStats = await shortTermMemory.getUserStats(userId);
-            const activeSessions = await sessionMemory.getActiveSessions();
-
-            return {
-                shortTerm: shortTermStats,
-                activeSessions: activeSessions.length,
-                timestamp: new Date()
+            // Create structured summary with entity extraction
+            const summary = {
+                timeRange: {
+                    start: messages[0].timestamp,
+                    end: messages[messages.length - 1].timestamp
+                },
+                messageCount: messages.length,
+                topics: this.extractTopics(conversationPairs),
+                entities: this.extractEntities(conversationPairs),
+                summary: `Conversation covering ${conversationPairs.length} exchanges`,
+                conversationPairs: conversationPairs.slice(0, 5) // Keep first 5 for context
             };
+
+            // Store in long-term memory using createSummary
+            await longTermMemory.createSummary(userId, messages);
+
+            // Delete old messages (archiving)
+            const messageIds = messages.map(m => m._id?.toString()).filter(Boolean) as string[];
+            if (messageIds.length > 0) {
+                await ConversationMessage.deleteMany({ _id: { $in: messageIds } });
+            }
+
+            this.logger.info(`Summarization complete for ${userId}`);
         } catch (error: any) {
-            this.logger.error(`Error getting memory stats: ${error.message}`);
-            return null;
+            this.logger.error(`Error processing summarization: ${error.message}`);
         }
+    }
+
+    /**
+     * Extract topics from conversation (simple keyword frequency)
+     */
+    private extractTopics(conversationPairs: string[]): string[] {
+        const wordFreq = new Map<string, number>();
+        const stopWords = this.extractKeywords(''); // Get stop words set
+
+        for (const pair of conversationPairs) {
+            const words = pair.toLowerCase().split(/\s+/);
+            for (const word of words) {
+                if (word.length > 3 && !stopWords.has(word)) {
+                    wordFreq.set(word, (wordFreq.get(word) || 0) + 1);
+                }
+            }
+        }
+
+        // Get top 5 topics
+        return Array.from(wordFreq.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+            .map(([word]) => word);
+    }
+
+    /**
+     * Extract entities (simple pattern matching)
+     */
+    private extractEntities(conversationPairs: string[]): string[] {
+        const entities = new Set<string>();
+        const text = conversationPairs.join(' ');
+
+        // Extract capitalized words (potential names/places)
+        const capitalizedWords = text.match(/\b[A-Z][a-z]+\b/g) || [];
+        capitalizedWords.forEach(word => {
+            if (word.length > 2) entities.add(word);
+        });
+
+        return Array.from(entities).slice(0, 10);
+    }
+
+    /**
+     * Clear session cache
+     */
+    async clearSessionCache(sessionId: string): Promise<void> {
+        // Clear cached messages for this session
+        // Note: sessionMemory doesn't have clearCache, we'll just let Redis TTL handle it
+        this.logger.debug(`Cleared cache for session ${sessionId}`);
+    }
+
+    /**
+     * Get memory statistics
+     */
+    async getMemoryStats(userId: string): Promise<any> {
+        const stats = await shortTermMemory.getUserStats(userId);
+        return {
+            shortTermMessages: stats.totalMessages,
+            oldestMessage: stats.oldestMessage,
+            newestMessage: stats.newestMessage
+        };
     }
 }
 

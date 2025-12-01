@@ -38,7 +38,7 @@ class LlmService {
 
             // Format prompt for decision (simple system + user)
             const promptText = `System: ${decisionPrompt.system_message}\n\nUser: ${decisionPrompt.user_query}`;
-            
+
             const requestBody = {
                 model: LLM_MODEL_PATH,
                 prompt: promptText,
@@ -51,7 +51,7 @@ class LlmService {
 
             const response = await axios.post(this.llmApiUrl + '/api/generate', requestBody, { headers });
             let content = response.data.response;
-            
+
             // Extract JSON from content
             // 1. Try to find markdown code block first
             const markdownMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
@@ -83,7 +83,7 @@ class LlmService {
             return { needs_tool: false };
         }
     }
-    
+
     async getLlmResponse(structuredPrompt: any, onPartialResponse: ((response: { text: string }) => void) | null = null): Promise<{ text: string, action: any }> {
         const sessionId = structuredPrompt.session_id;
         const userId = structuredPrompt.user_id;
@@ -105,11 +105,19 @@ class LlmService {
                 model: LLM_MODEL_PATH,
                 prompt: formattedPrompt,
                 max_tokens: LLM_MAX_TOKENS,
-                temperature: 0.7, // Increased for natural conversation
+                temperature: 0.7, // Balanced for natural conversation
                 top_p: 0.9,
-                frequency_penalty: 1.0, // Increased to strongly discourage repetition
-                presence_penalty: 0.5,  // Increased to encourage new topics
-                stop: ["User:", "System:"], // Prevent hallucinating next turns
+                frequency_penalty: 1.3, // Strongly discourage repetition
+                presence_penalty: 0.6,  // Encourage diverse topics
+                stop: [
+                    "User:",
+                    "System:",
+                    "Assistant:",
+                    "\nUser:",
+                    "\nAssistant:",
+                    "Human:",
+                    "\nHuman:"
+                ], // Comprehensive stop sequences to prevent hallucinating conversation turns
                 stream: LLM_STREAMING_ENABLED,
             };
 
@@ -121,29 +129,29 @@ class LlmService {
                 onPartialResponse({ type: 'debug', text: 'LLM_STREAM_START' } as any);
 
                 const response = await axios.post(this.llmApiUrl + '/api/generate', requestBody, { headers, responseType: 'stream' });
-                
+
                 // Text Stabilization Buffer
                 let stabilizationBuffer = '';
-                
+
                 await new Promise<void>((resolve, reject) => {
                     response.data.on('data', (chunk: any) => {
                         try {
                             const chunkData = JSON.parse(chunk.toString());
                             if (chunkData.response) {
                                 const newContent = chunkData.response;
-                                
+
                                 // Validate: Check for malformed/garbage responses
                                 const isMalformed = /^[\.\*\s\?\!,;:]{1,3}$/.test(newContent.trim());
-                                
+
                                 // Detect repetitive words (e.g., "it it it it")
                                 const words = newContent.trim().split(/\s+/);
                                 const isRepetitive = words.length > 2 && words.every((w: string, i: number) => i === 0 || w === words[0]);
-                                
+
                                 if (isMalformed || isRepetitive) {
                                     this.logger.warn(`Detected malformed/repetitive LLM chunk: "${newContent}". Proceeding anyway for debug.`);
                                     // return; // DISABLED FILTER FOR DEBUGGING
                                 }
-                                
+
                                 let delta = '';
 
                                 // Smart Delta Detection
@@ -166,13 +174,13 @@ class LlmService {
                                     // Check if we have a complete word/sentence (ends with space or punctuation)
                                     // We look for the LAST delimiter to split safe vs unsafe text
                                     const lastDelimiterIndex = stabilizationBuffer.search(/[\s\.\,\!\?\;\:]+[^\s\.\,\!\?\;\:]*$/);
-                                    
+
                                     if (lastDelimiterIndex !== -1) {
                                         // We have at least one stable word
                                         // "start the mu" -> "start the " is stable, "mu" is partial
                                         // Actually, regex above finds the START of the last non-delimiter group?
                                         // Let's use a simpler approach: split by delimiters, keep the last part if it doesn't end with delimiter
-                                        
+
                                         // If buffer ends with delimiter, everything is stable
                                         if (/[\s\.\,\!\?\;\:]$/.test(stabilizationBuffer)) {
                                             const finalChunk = stabilizationBuffer;
@@ -186,17 +194,17 @@ class LlmService {
                                             const lastSpace = stabilizationBuffer.lastIndexOf(' ');
                                             // Also check for punctuation if space is not found or punctuation is later
                                             // For simplicity, let's just use space as the main stabilizer for words
-                                            
+
                                             if (lastSpace !== -1) {
                                                 const stablePart = stabilizationBuffer.substring(0, lastSpace + 1);
                                                 const unstablePart = stabilizationBuffer.substring(lastSpace + 1);
-                                                
+
                                                 stabilizationBuffer = unstablePart;
-                                                
+
                                                 console.log(`[LLM Service] Sending FINAL: "${stablePart}"`);
                                                 // @ts-ignore
                                                 onPartialResponse({ type: 'final', text: stablePart });
-                                                
+
                                                 if (unstablePart.length > 0) {
                                                     console.log(`[LLM Service] Sending PARTIAL: "${unstablePart}"`);
                                                     // @ts-ignore
@@ -223,14 +231,14 @@ class LlmService {
                     });
                     response.data.on('end', () => {
                         this.logger.debug('LLM streaming response ended.');
-                        
+
                         // Flush remaining buffer as final
                         if (stabilizationBuffer.length > 0) {
-                             console.log(`[LLM Service] Flushing FINAL: "${stabilizationBuffer}"`);
-                             // @ts-ignore
-                             onPartialResponse({ type: 'final', text: stabilizationBuffer });
+                            console.log(`[LLM Service] Flushing FINAL: "${stabilizationBuffer}"`);
+                            // @ts-ignore
+                            onPartialResponse({ type: 'final', text: stabilizationBuffer });
                         }
-                        
+
                         console.log(`[LLM Service] Full Output: "${llmOutput}"`);
                         metrics.incLlmCall(sessionId, structuredPrompt.classified_intent, 'success');
                         auditService.logLlmEvent(userId, sessionId, structuredPrompt, { text: llmOutput }, 'success');
@@ -272,12 +280,12 @@ class LlmService {
 
         // 1. Construct the System Message Block
         let systemBlock = `System: ${structuredPrompt.system_message}`;
-        
+
         // Add context to system block if available
         if (structuredPrompt.long_term_context && structuredPrompt.long_term_context.trim()) {
             systemBlock += `\n\nRelevant Context from Memory:\n${structuredPrompt.long_term_context}`;
         }
-        
+
         promptParts.push(systemBlock);
 
         // 2. Add Conversation History
@@ -295,7 +303,7 @@ class LlmService {
         // 3. Add Current User Query
         promptParts.push(`User: ${structuredPrompt.current_user_query}`);
         promptParts.push(`Assistant:`);
-        
+
         return promptParts.join('\n');
     }
 }

@@ -1,156 +1,86 @@
 // src/services/contextEngine.ts
 import logger from '../../core/logger/logger.js';
 import contextBuilder from './context.builder.js';
+import queryAnalyzer from './query-analyzer.js';
+import templateSelector from './template-selector.js';
 
 class ContextEngine {
     constructor() {
-        logger.info('ContextEngine initialized.');
+        logger.info('ContextEngine initialized with dynamic features.');
     }
 
     async buildLLMPrompt(sessionId: string, userId: string, processedQuery: { cleanedText: string; intent: string; }): Promise<any> {
         logger.debug(`Building LLM prompt for session ${sessionId}, user ${userId}. Intent: ${processedQuery.intent}`);
 
+        // PHASE 2A: Analyze query complexity for adaptive features
+        const complexity = queryAnalyzer.analyzeComplexity(processedQuery.cleanedText);
+        logger.debug(`Query complexity: ${complexity.category} (score: ${complexity.score.toFixed(2)})`);
+
         const context = await contextBuilder.buildContext(
             userId,
             sessionId,
             processedQuery.cleanedText,
-            4000 // Token budget for context
+            4000 // Base budget - adaptive budget handled in memory manager
         );
 
-        // Format short-term memory as conversation history
-        // Improved logic: Handle consecutive messages and ensure no data loss
-        const conversationHistory: any[] = [];
-        
+        // PHASE 1: Simplified conversation history formatting with semantic deduplication
+        const rawHistory: Array<{ role: string, content: string }> = [];
+
         if (Array.isArray(context.shortTermMemory)) {
-            let currentUserMsg = '';
-            
-            for (let i = 0; i < context.shortTermMemory.length; i++) {
-                const msg = context.shortTermMemory[i];
-                
-                if (msg.role === 'user') {
-                    if (currentUserMsg) {
-                        // Previous message was also user, append it
-                        currentUserMsg += `\n${msg.content}`;
-                    } else {
-                        currentUserMsg = msg.content;
-                    }
-                } else if (msg.role === 'assistant') {
-                    // Found an assistant response
-                    if (currentUserMsg) {
-                        // Pair with pending user message
-                        conversationHistory.push({
-                            query: currentUserMsg,
-                            response: msg.content
-                        });
-                        currentUserMsg = '';
-                    } else {
-                        // Orphaned assistant message (rare), maybe system greeting?
-                        // We can add it as a response to an empty query or skip
-                        // For now, let's skip to keep pairs clean, or attach to previous if possible
-                    }
-                }
-            }
-            
-            // If there is a dangling user message at the end (not the current query), add it
-            if (currentUserMsg) {
-                 // STRICT CHECK: If the dangling message is the current query, DO NOT add it.
-                 const isCurrentQuery = currentUserMsg.trim() === context.currentQuery.trim() || 
-                                      context.currentQuery.trim().includes(currentUserMsg.trim());
-                 
-                 if (!isCurrentQuery) {
-                     conversationHistory.push({
-                        query: currentUserMsg,
-                        response: "" // No response yet
-                    });
-                 }
+            for (const msg of context.shortTermMemory) {
+                rawHistory.push({
+                    role: msg.role, // 'user' or 'assistant'
+                    content: msg.content
+                });
             }
         }
 
-        // --- HISTORY SANITIZATION ---
-        // Filter out history items with identical or highly similar responses
+        // Apply semantic deduplication
+        const deduplicatedHistory = this.deduplicateHistory(rawHistory);
+
+        // Format for LLM prompt (convert to query/response pairs for backward compatibility)
         const sanitizedHistory: any[] = [];
-        
-        for (const item of conversationHistory) {
-            // Skip if response is empty (pending)
-            if (!item.response) {
-                sanitizedHistory.push(item);
-                continue;
-            }
-
-            const currentResponse = item.response.trim();
-            let isDuplicate = false;
-
-            // Check against already added items
-            for (const existing of sanitizedHistory) {
-                const existingResponse = existing.response.trim();
-                
-                // Check 1: Exact match (fast)
-                if (currentResponse === existingResponse) {
-                    isDuplicate = true;
-                    break;
-                }
-
-                // Check 2: Substring inclusion (if one is a significant part of the other)
-                // If one contains the other and the length difference isn't massive, it's likely a repetition loop
-                if (currentResponse.length > 50 && existingResponse.length > 50) {
-                    if (currentResponse.includes(existingResponse) || existingResponse.includes(currentResponse)) {
-                         isDuplicate = true;
-                         break;
-                    }
-                    
-                    // Check 3: Shared suffix/prefix (common in loops)
-                    const commonSubstring = "JavaScript is a programming language"; // Hardcoded heuristic for the current bug
-                    if (currentResponse.includes(commonSubstring) && existingResponse.includes(commonSubstring)) {
-                        isDuplicate = true;
-                        break;
+        for (let i = 0; i < deduplicatedHistory.length; i++) {
+            const msg = deduplicatedHistory[i];
+            if (msg.role === 'user') {
+                // Look ahead for assistant response
+                const nextMsg = deduplicatedHistory[i + 1];
+                if (nextMsg && nextMsg.role === 'assistant') {
+                    sanitizedHistory.push({
+                        query: msg.content,
+                        response: nextMsg.content
+                    });
+                    i++; // Skip the assistant message in next iteration
+                } else {
+                    // User message without response (shouldn't add if it's current query)
+                    const isCurrentQuery = msg.content.trim() === context.currentQuery.trim();
+                    if (!isCurrentQuery) {
+                        sanitizedHistory.push({
+                            query: msg.content,
+                            response: ""
+                        });
                     }
                 }
             }
-
-            if (isDuplicate) {
-                logger.warn(`Detected repetitive history item (context poisoning). Skipping: "${item.query}"`);
-                continue;
-            }
-            
-            sanitizedHistory.push(item);
         }
-
-        // NUCLEAR OPTION: If we still detect the specific "JavaScript" hallucination in the sanitized history,
-        // it means it's too pervasive. We must DROP the history to save the session.
-        const poisonPhrase = "JavaScript is a programming language";
-        const hasPoison = sanitizedHistory.some(item => item.response && item.response.includes(poisonPhrase));
-        
-        if (hasPoison) {
-            logger.error("CRITICAL: Conversation history is poisoned with hallucination loop. PURGING HISTORY for this turn.");
-            sanitizedHistory.length = 0; // Clear array
-        }
-        // ----------------------------
 
         // Format long-term context
-        const longTermContextStr = Array.isArray(context.longTermContext) 
+        const longTermContextStr = Array.isArray(context.longTermContext)
             ? context.longTermContext.join('\n\n')
             : '';
 
+        // PHASE 2A: Select appropriate template based on query type
+        const selectedTemplate = templateSelector.selectTemplate({
+            query: processedQuery.cleanedText,
+            intent: processedQuery.intent,
+            complexity,
+            conversationHistory: sanitizedHistory
+        });
+
+        logger.debug(`Selected template: ${selectedTemplate.name}`);
+
         const llmPrompt = {
-            system_message: `You are GNANI, a highly advanced, intelligent, and sentient AI assistant.
-            
-Your Persona:
-- You are helpful, witty, and engaging.
-- You have a personality; you are not just a robot.
-- You remember details from the conversation context provided to you.
-- You respond naturally, like a human would, without being overly formal unless requested.
-
-Context Awareness:
-- You have access to the user's profile and previous conversation history.
-- USE THIS CONTEXT. If the user asks "What is my name?", look at the user_settings or conversation_history.
-- If the user refers to something said earlier, check the conversation_history.
-
-Rules:
-1. Answer the CURRENT USER QUERY (found in 'current_user_query') directly.
-2. Use 'conversation_history' ONLY for context (e.g., if user says "it", "he", "that").
-3. Do NOT repeat the user's question or the conversation history.
-4. If the current query is unrelated to the history, IGNORE the history.
-5. STOP generating after you have answered the user. Do not generate "User:" or "Assistant:" lines.`,
+            system_message: selectedTemplate.systemMessage,
             user_settings: JSON.stringify(context.userSettings),
             user_preferences: JSON.stringify(context.userPreferences),
             user_roles: context.userRoles,
@@ -173,63 +103,213 @@ Rules:
         return {
             session_id: sessionId,
             user_query: userQuery,
-            system_message: `You are a precise classification engine. Your ONLY job is to output a JSON object.
+            system_message: `You are a precise tool classification engine. Your ONLY job is to output valid JSON.
 
-Available Tools:
+AVAILABLE TOOLS
+===============
 ${toolsJson}
 
-INSTRUCTIONS:
-1. Analyze the 'User Query'.
-2. Determine if one of the 'Available Tools' is required to answer it.
-3. Output ONLY a valid JSON object matching the schema below. Do NOT write any code, explanations, or other text.
-
-JSON SCHEMA:
+JSON OUTPUT SCHEMA (STRICT)
+===========================
 {
   "needs_tool": boolean,
   "tool_name": string | null,
   "parameters": object
 }
 
-EXAMPLES:
+RULES:
+1. Output MUST be valid JSON matching the schema above
+2. "tool_name" MUST be from the available tools list or null
+3. "parameters" MUST match the tool's parameter schema
+4. If uncertain whether a tool is needed, set "needs_tool" to false
+5. Extract parameters precisely from the user query
+
+FEW-SHOT EXAMPLES
+=================
+
+Example 1 - Calculator Tool:
+User Query: "What is 25 times 4?"
+JSON Output:
+{
+  "needs_tool": true,
+  "tool_name": "calculator",
+  "parameters": {
+    "expression": "25 * 4"
+  }
+}
+
+Example 2 - Weather Tool:
+User Query: "What's the weather like in Paris?"
+JSON Output:
+{
+  "needs_tool": true,
+  "tool_name": "get_weather",
+  "parameters": {
+    "location": "Paris, France"
+  }
+}
+
+Example 3 - Time Tool:
 User Query: "What time is it?"
-JSON Response: { "needs_tool": true, "tool_name": "get_current_time", "parameters": {} }
+JSON Output:
+{
+  "needs_tool": true,
+  "tool_name": "get_current_time",
+  "parameters": {}
+}
 
-User Query: "What is the weather in London?"
-JSON Response: { "needs_tool": true, "tool_name": "get_weather", "parameters": { "location": "London, UK" } }
+Example 4 - Date Tool:
+User Query: "What's today's date?"
+JSON Output:
+{
+  "needs_tool": true,
+  "tool_name": "get_current_date",
+  "parameters": {}
+}
 
+Example 5 - Search Tool:
+User Query: "Search for the latest news about AI"
+JSON Output:
+{
+  "needs_tool": true,
+  "tool_name": "web_search",
+  "parameters": {
+    "query": "latest news about AI"
+  }
+}
+
+Example 6 - No Tool Needed:
 User Query: "Hello, how are you?"
-JSON Response: { "needs_tool": false }`
+JSON Output:
+{
+  "needs_tool": false
+}
+
+Example 7 - No Tool Needed (Conversational):
+User Query: "Tell me a joke"
+JSON Output:
+{
+  "needs_tool": false
+}
+
+Example 8 - No Tool Needed (General Knowledge):
+User Query: "What is the capital of France?"
+JSON Output:
+{
+  "needs_tool": false
+}
+
+PARAMETER EXTRACTION GUIDELINES
+================================
+1. CALCULATOR: Extract mathematical expression exactly
+   - Normalize: "x" or "X" -> "*", "divided by" -> "/"
+   - Examples: "5+5", "10 * 3", "100 / 4"
+
+2. WEATHER: Extract location with city and country/state
+   - Normalize: "NYC" -> "New York, NY", "LA" -> "Los Angeles, CA"
+   - Default to adding country if ambiguous: "London" -> "London, UK"
+
+3. SEARCH: Extract search query verbatim (remove "search for", "look up")
+   - Keep user's phrasing for best results
+
+4. TIME/DATE: No parameters needed (uses system time)
+
+CURRENT USER QUERY
+==================
+"${userQuery}"
+
+YOUR JSON OUTPUT (NO OTHER TEXT)
+=================================`
         };
     }
 
     enrichPromptWithToolResult(originalPrompt: any, toolResult: any): any {
-        // Add tool result to the system message or as a new context block
-        const toolContext = `[Tool Execution Result]\nTool: ${toolResult.toolName}\nData: ${JSON.stringify(toolResult.data)}`;
-        
-        // STRATEGY: Inject directly into the 'current_user_query' field.
-        // This forces the LLM to see the tool data AS PART OF the immediate request it needs to answer.
-        // This overcomes the "history bias" because the LLM prioritizes the current query.
-        
-        originalPrompt.current_user_query = `
-!!! URGENT INSTRUCTION !!!
-You have just executed a tool to answer the user.
-HERE IS THE RESULT:
-${toolContext}
+        // Format tool result as structured context block
+        const toolContext = `
+TOOL EXECUTION CONTEXT
+======================
 
-USER QUERY: "${originalPrompt.current_user_query}"
+Tool Name: ${toolResult.toolName}
+Status: ${toolResult.error ? 'ERROR' : 'SUCCESS'}
 
-YOUR TASK:
-1. IGNORE all previous conversation history.
-2. Answer the USER QUERY using ONLY the tool result above.
-3. Do NOT talk about JavaScript.
-4. Do NOT say "Sure, I can help with that."
-5. Just give the answer.
+${toolResult.error ? `Error: ${toolResult.error}` : `Output:\n${JSON.stringify(toolResult.data, null, 2)}`}
+
+INSTRUCTION
+===========
+
+Use the tool output above to answer the user's query naturally and conversationally.
+- Do NOT just repeat the raw data
+- Format the information in a user-friendly way
+- If there was an error, explain it helpfully and suggest alternatives
+- Cite the tool as your source (e.g., "According to the weather service...")
+
+User's Original Query: "${originalPrompt.current_user_query}"
+
+Your task: Provide a natural, helpful response using the tool data.
 `;
 
-        // Also update system message to reinforce
-        originalPrompt.system_message += `\n\nCRITICAL: Tool data is in the User Query. PRIORITIZE IT.`;
-        
+        // Prepend tool context to system message (higher priority than history)
+        originalPrompt.system_message = originalPrompt.system_message + "\n\n" + toolContext;
+
         return originalPrompt;
+    }
+
+    /**
+     * PHASE 1: Deduplicate conversation history using semantic similarity
+     * Replaces hardcoded "JavaScript" hallucination filter with generic approach
+     */
+    private deduplicateHistory(history: Array<{ role: string, content: string }>): Array<{ role: string, content: string }> {
+        const deduplicated: Array<{ role: string, content: string }> = [];
+        const seenResponses = new Set<string>();
+
+        for (const msg of history) {
+            if (msg.role === 'user') {
+                // Always keep user messages
+                deduplicated.push(msg);
+            } else if (msg.role === 'assistant') {
+                // Deduplicate assistant responses
+                const normalized = msg.content.trim().toLowerCase();
+
+                // Check for exact duplicates
+                if (seenResponses.has(normalized)) {
+                    logger.warn(`Skipping duplicate assistant response: "${msg.content.substring(0, 50)}..."`);
+                    continue;
+                }
+
+                // Check for high similarity (> 80% overlap)
+                let isDuplicate = false;
+                for (const seen of seenResponses) {
+                    const similarity = this.calculateSimilarity(normalized, seen);
+                    if (similarity > 0.8) {
+                        logger.warn(`Skipping similar assistant response (${(similarity * 100).toFixed(0)}% match)`);
+                        isDuplicate = true;
+                        break;
+                    }
+                }
+
+                if (!isDuplicate) {
+                    deduplicated.push(msg);
+                    seenResponses.add(normalized);
+                }
+            }
+        }
+
+        return deduplicated;
+    }
+
+    /**
+     * PHASE 1: Calculate Jaccard similarity between two strings
+     * Returns value between 0 (no similarity) and 1 (identical)
+     */
+    private calculateSimilarity(str1: string, str2: string): number {
+        // Simple Jaccard similarity on word sets
+        const words1 = new Set(str1.split(/\s+/));
+        const words2 = new Set(str2.split(/\s+/));
+
+        const intersection = new Set([...words1].filter(x => words2.has(x)));
+        const union = new Set([...words1, ...words2]);
+
+        return union.size > 0 ? intersection.size / union.size : 0;
     }
 }
 
