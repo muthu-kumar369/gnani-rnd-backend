@@ -1,6 +1,6 @@
 import { ITool, ToolParameter } from '../tool.interface.js';
-import axios from 'axios';
 import { createContextualLogger } from '../../../core/logger/logger.js';
+import { OpenMeteoClient } from './open-meteo.client.js';
 
 export class WeatherTool implements ITool {
     name = 'get_weather';
@@ -15,7 +15,7 @@ export class WeatherTool implements ITool {
     ];
 
     private logger = createContextualLogger({ module: 'WeatherTool' });
-    private apiKey = process.env.OPENWEATHER_API_KEY;
+    private client = new OpenMeteoClient();
 
     async execute(params: any): Promise<any> {
         const location = params.location;
@@ -23,34 +23,39 @@ export class WeatherTool implements ITool {
             return { error: 'Location is required' };
         }
 
-        if (!this.apiKey) {
-            this.logger.warn('OPENWEATHER_API_KEY is not set. Returning mock data.');
-            // Return mock data if no API key
-            return {
-                location: location,
-                temperature: 22,
-                unit: 'Celsius',
-                condition: 'Partly Cloudy',
-                humidity: 60,
-                wind_speed: 15,
-                note: 'Mock data (API key missing)'
-            };
-        }
-
         try {
-            // Geocoding first (optional, but better for accuracy) or direct weather call
-            const url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(location)}&appid=${this.apiKey}&units=metric`;
-            const response = await axios.get(url);
-            const data = response.data;
+            this.logger.info(`Fetching weather for location: ${location}`);
+
+            // 1. Geocoding
+            const coords = await this.client.getCoordinates(location);
+
+            if (!coords) {
+                this.logger.warn(`Location not found: ${location}`);
+                return { error: `Location '${location}' not found.` };
+            }
+
+            // 2. Weather Data
+            const weather = await this.client.getWeather(coords.latitude, coords.longitude);
+
+            // 3. Construct Response (matching previous format)
+            const locationName = coords.admin1
+                ? `${coords.name}, ${coords.admin1}, ${coords.country}`
+                : `${coords.name}, ${coords.country}`;
 
             return {
-                location: `${data.name}, ${data.sys.country}`,
-                temperature: data.main.temp,
-                unit: 'Celsius',
-                condition: data.weather[0].description,
-                humidity: data.main.humidity,
-                wind_speed: data.wind.speed
+                location: locationName,
+                temperature: weather.temperature,
+                unit: 'Celsius', // Open-Meteo defaults to Celsius, and we requested it implicitly (or can be explicit)
+                condition: weather.condition,
+                humidity: weather.humidity,
+                wind_speed: weather.wind_speed,
+                // Adding extra info that might be useful but keeping core structure
+                coordinates: {
+                    lat: coords.latitude,
+                    lon: coords.longitude
+                }
             };
+
         } catch (error: any) {
             this.logger.error(`Error fetching weather: ${error.message}`);
             return { error: `Failed to fetch weather: ${error.message}` };
