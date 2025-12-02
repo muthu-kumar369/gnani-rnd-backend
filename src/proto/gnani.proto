@@ -33,7 +33,16 @@ message SendAudioStreamResponse {
     string llm_chunk = 2;
     string final_text = 3;
     string error_message = 4;
+    ToolStatus tool_status = 5;
   }
+}
+
+message ToolStatus {
+  string tool_name = 1;
+  string status = 2; // 'starting', 'running', 'completed', 'failed'
+  int32 progress = 3; // 0-100
+  string message = 4; // Human-readable status
+  int64 elapsed_ms = 5; // Time elapsed
 }
 
 message EndSessionRequest {

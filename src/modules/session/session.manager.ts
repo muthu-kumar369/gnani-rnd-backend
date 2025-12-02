@@ -13,15 +13,18 @@ import llmResponseParser from '../llm/llm-response.parser.js';
 import audioStreamer from '../../utils/audio.streamer.js';
 import toolRegistry from '../tools/tool.registry.js';
 import sessionMemory from '../memory/services/session-memory.service.js';
+import latencyMonitor from '../../core/monitoring/latency.monitor.js';
+import conversationService from '../conversation/conversation.service.js';
 import { Logger } from 'winston';
 
-interface Session {
+export interface Session {
     userId: string;
     audioBuffer: Buffer[];
     lastActivity: number;
     timeoutId: NodeJS.Timeout | null;
-    onTranscriptionCallback: (transcript: string, isFinal: boolean) => void;
-    onLlmChunkCallback?: (text: string) => void;
+    onTranscriptionCallback: (transcript: string, isFinal: boolean) => Promise<void> | void;
+    onLlmChunkCallback?: (text: string) => Promise<void> | void;
+    onToolStatusCallback?: (status: any) => Promise<void> | void;
     metadata: any;
     currentTranscription: string;
 }
@@ -40,9 +43,13 @@ class SessionManager {
         metrics.activeSessionsGauge.set(0);
     }
 
-    async startSession(userId: string, onTranscriptionCallback: (transcript: string, isFinal: boolean) => void, onLlmChunkCallback?: (text: string) => void): Promise<string> {
-        const sessionId = uuidv4();
-        this.logger.debug(`Generated new session ID: ${sessionId}`);
+    async startSession(userId: string, onTranscriptionCallback: (transcript: string, isFinal: boolean) => Promise<void> | void, onLlmChunkCallback?: (text: string) => Promise<void> | void, onToolStatusCallback?: (status: any) => Promise<void> | void, existingSessionId?: string): Promise<string> {
+        const sessionId = existingSessionId || uuidv4();
+        if (existingSessionId) {
+            this.logger.info(`Resuming existing session ID: ${sessionId}`);
+        } else {
+            this.logger.debug(`Generated new session ID: ${sessionId}`);
+        }
 
         // Initialize in-memory session
         this.sessions.set(sessionId, {
@@ -52,6 +59,7 @@ class SessionManager {
             timeoutId: null,
             onTranscriptionCallback,
             onLlmChunkCallback,
+            onToolStatusCallback,
             metadata: {},
             currentTranscription: ''
         });
@@ -104,7 +112,12 @@ class SessionManager {
                 }
                 session.currentTranscription = transcript;
                 if (session.onTranscriptionCallback) {
-                    session.onTranscriptionCallback(transcript, isFinal);
+                    // We don't await here because this is inside a callback from WhisperService which might not be async-aware
+                    // However, for backpressure to work fully, we ideally should.
+                    // For now, we just call it. If it returns a promise, we catch errors.
+                    Promise.resolve(session.onTranscriptionCallback(transcript, isFinal)).catch(err => {
+                        this.logger.error(`Error in onTranscriptionCallback for session ${sessionId}: ${err.message}`);
+                    });
                 }
             }, false);
             this.logger.debug(`Appended audio chunk to session ${sessionId}. Buffer size: ${session.audioBuffer.length}`);
@@ -197,11 +210,11 @@ class SessionManager {
 
         await new Promise<void>(resolve => {
             // Send an empty buffer with isLastChunk=true to trigger final transcription
-            whisperService.sendAudioChunk(sessionId, Buffer.alloc(0), (transcript: string, isFinal: boolean) => {
+            whisperService.sendAudioChunk(sessionId, Buffer.alloc(0), async (transcript: string, isFinal: boolean) => {
                 session.currentTranscription = transcript;
                 if (isFinal) {
                     if (session.onTranscriptionCallback) {
-                        session.onTranscriptionCallback(transcript, isFinal);
+                        await session.onTranscriptionCallback(transcript, isFinal);
                     }
                     resolve();
                 }
@@ -215,7 +228,7 @@ class SessionManager {
     }
 
     async processTextInput(sessionId: string, textInput: string): Promise<any> {
-        this.logger.info(`Processing text input for session ${sessionId}: "${textInput}"`);
+        this.logger.info(`Processing text input for session ${sessionId}: "${textInput.substring(0, 50)}..."`);
         const session = this.sessions.get(sessionId);
         if (!session) {
             this.logger.error(`Session ${sessionId} not found during text input processing.`);
@@ -232,15 +245,35 @@ class SessionManager {
             isSpeaking: false
         }).catch(err => this.logger.error(`Failed to update Redis session state: ${err.message}`));
 
-        // Notify callback about the input (simulating STT result)
-        if (session.onTranscriptionCallback) {
-            session.onTranscriptionCallback(textInput, true);
+        let processedText = textInput;
+        let imageData = null;
+
+        // Check if input is a JSON string (potential image or multi-modal data)
+        try {
+            if (textInput.trim().startsWith('{')) {
+                const parsed = JSON.parse(textInput);
+                if (parsed.type === 'image' && parsed.content) {
+                    this.logger.info(`Detected image input for session ${sessionId}`);
+                    processedText = "Analyze this image."; // Default prompt for image
+                    imageData = {
+                        data: parsed.content,
+                        mimeType: parsed.mimeType || 'image/png'
+                    };
+                }
+            }
+        } catch (e) {
+            // Not JSON, treat as normal text
         }
 
-        return this.processQueryAndGenerateResponse(sessionId, textInput);
+        // Notify callback about the input (simulating STT result)
+        if (session.onTranscriptionCallback) {
+            await session.onTranscriptionCallback(processedText, true);
+        }
+
+        return this.processQueryAndGenerateResponse(sessionId, processedText, imageData);
     }
 
-    private async processQueryAndGenerateResponse(sessionId: string, textInput: string): Promise<any> {
+    private async processQueryAndGenerateResponse(sessionId: string, textInput: string, imageData: any = null): Promise<any> {
         const session = this.sessions.get(sessionId);
         if (!session) return null;
 
@@ -260,7 +293,8 @@ class SessionManager {
             sessionId,
             session.userId,
             processedQuery,
-            toolDefinitions // Pass tools to prompt
+            toolDefinitions, // Pass tools to prompt
+            imageData // Pass image data
         );
 
         let llmResponseText = '';
@@ -276,9 +310,9 @@ class SessionManager {
             this.logger.debug(`Re-Act Turn ${turnCount}/${MAX_TURNS}`);
 
             try {
-                const llmRawResponse = await llmService.getLlmResponse(currentPrompt, (partialResponse: any) => {
+                const llmRawResponse = await llmService.getLlmResponse(currentPrompt, async (partialResponse: any) => {
                     if (session.onLlmChunkCallback) {
-                        session.onLlmChunkCallback(partialResponse);
+                        await session.onLlmChunkCallback(partialResponse);
                     }
                 });
 
@@ -330,7 +364,7 @@ class SessionManager {
                     console.log(`[ToolLayer] Executing tool: ${toolCall.tool}`);
 
                     // Execute Tool
-                    const result = await toolRegistry.executeTool(toolCall.tool, toolCall.params);
+                    const result = await toolRegistry.executeTool(toolCall.tool, toolCall.params, session.onToolStatusCallback);
                     this.logger.info(`Tool execution result: ${JSON.stringify(result)}`);
 
                     // Enrich prompt with result for next turn
@@ -381,6 +415,11 @@ class SessionManager {
             this.logger.info(`LLM response generated for session ${sessionId}: ${llmResponseText.substring(0, 50)}...`);
         }
 
+        // Ensure conversation exists in DB (for history list)
+        conversationService.ensureConversation(sessionId, session.userId).catch(err => {
+            this.logger.error(`Error ensuring conversation exists: ${err.message}`);
+        });
+
         // Store interaction in memory system (fire-and-forget to not block response)
         import('../memory/memory.manager.js').then(module => {
             module.default.storeInteraction(
@@ -404,6 +443,10 @@ class SessionManager {
         queryProcessor.addInteractionToMemory(sessionId, processedQuery.cleanedText, llmResponseText);
 
         auditService.logEvent('SESSION_FINALIZE', session.userId, sessionId, { finalTranscription: textInput, llmResponseText, actionDirective }, 'success');
+
+        // Log latency report for this conversation turn
+        latencyMonitor.logReport(sessionId);
+        latencyMonitor.clearSession(sessionId);
 
         return {
             cleanedText: processedQuery.cleanedText,

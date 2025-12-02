@@ -9,7 +9,7 @@ class ContextEngine {
         logger.info('ContextEngine initialized with dynamic features.');
     }
 
-    async buildLLMPrompt(sessionId: string, userId: string, processedQuery: { cleanedText: string; intent: string; }, toolDefinitions: any[] = []): Promise<any> {
+    async buildLLMPrompt(sessionId: string, userId: string, processedQuery: { cleanedText: string; intent: string; }, toolDefinitions: any[] = [], imageData: any = null): Promise<any> {
         logger.debug(`Building LLM prompt for session ${sessionId}, user ${userId}. Intent: ${processedQuery.intent}`);
 
         // PHASE 2A: Analyze query complexity for adaptive features
@@ -84,13 +84,18 @@ class ContextEngine {
         // Build system message with proper priority order
         let systemMessage = '';
 
-        // 1. CRITICAL RULES (highest priority - anti-repetition, focus)
+        // 1. CRITICAL RULES (highest priority - anti-repetition, focus, NO meta-commentary)
         systemMessage += `CRITICAL RULES:
-1. Focus ONLY on the user's CURRENT query (shown at the end of this prompt)
-2. Do NOT repeat information from previous responses unless explicitly asked
-3. Do NOT greet the user unless this is the first message in the conversation
-4. Previous conversation history is for context only, not your primary focus
-5. Answer concisely and directly
+1. Respond DIRECTLY - do NOT add prefixes like "Sure, here is...", "Here's the answer...", "Let me help..."
+2. Focus ONLY on the user's CURRENT query (shown at the end of this prompt)
+3. Do NOT repeat information from previous responses unless explicitly asked
+4. Do NOT greet the user unless this is the first message in the conversation
+5. Previous conversation history is for context only, not your primary focus
+6. Answer concisely and directly
+7. Be natural and conversational - avoid robotic or overly formal language
+8. Do NOT end every response with the same question (e.g., "What would you like to know about X?")
+9. Adapt immediately when the user changes the topic
+10. If the user asks to "leave" a topic, stop mentioning it entirely
 
 `;
 
@@ -149,6 +154,7 @@ ${longTermContextStr}
             classified_intent: processedQuery.intent,
             long_term_context: longTermContextStr,
             action_directives_guide: `If the intent is 'system_command', 'utility_request', or 'multi_step_instruction', consider suggesting a system action in JSON format, e.g., { "action": "OPEN_APP", "app_name": "Calculator" }. Ensure actions are authorized by user_roles/permissions.`,
+            image_data: imageData
         };
 
         logger.debug(`LLM Prompt for session ${sessionId}: ${JSON.stringify(llmPrompt)}`);

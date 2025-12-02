@@ -3,6 +3,7 @@ import axios from 'axios';
 import { createContextualLogger } from '../../core/logger/logger.js';
 import metrics from '../../core/monitoring/metrics.js';
 import auditService from '../../core/logger/audit.service.js';
+import latencyMonitor from '../../core/monitoring/latency.monitor.js';
 import {
     LLM_SERVER_URL,
     LLM_MODEL_PATH,
@@ -14,6 +15,7 @@ import {
 import { Logger } from 'winston';
 
 import { CircuitBreaker } from '../../core/reliability/circuit-breaker.js';
+import { retryWithBackoff } from '../../utils/retry.js';
 
 class LlmService {
     private logger: Logger;
@@ -95,7 +97,7 @@ class LlmService {
         }
     }
 
-    async getLlmResponse(structuredPrompt: any, onPartialResponse: ((response: { text: string }) => void) | null = null): Promise<{ text: string, action: any }> {
+    async getLlmResponse(structuredPrompt: any, onPartialResponse: ((response: { text: string }) => Promise<void> | void) | null = null): Promise<{ text: string, action: any }> {
         const sessionId = structuredPrompt.session_id;
         const userId = structuredPrompt.user_id;
         this.logger.debug(`Sending prompt to LLM for session ${sessionId}: ${JSON.stringify(structuredPrompt)}`);
@@ -112,14 +114,13 @@ class LlmService {
             const formattedPrompt = this._formatPromptForLLM(structuredPrompt);
             this.logger.debug(`Crafted prompt for LLM: ${JSON.stringify(formattedPrompt)}`);
 
-            const requestBody = {
+            let requestBody: any = {
                 model: LLM_MODEL_PATH,
-                prompt: formattedPrompt,
                 max_tokens: LLM_MAX_TOKENS,
-                temperature: 0.7, // Balanced for natural conversation
+                temperature: 0.7,
                 top_p: 0.9,
-                frequency_penalty: 1.5, // Strongly discourage repetition (increased from 1.3)
-                presence_penalty: 0.8,  // Encourage diverse topics (increased from 0.6)
+                frequency_penalty: 0.3,  // Reduced from 1.5 - gentle repetition control
+                presence_penalty: 0.2,   // Reduced from 0.8 - slight topic diversity
                 stop: [
                     "User:",
                     "System:",
@@ -128,29 +129,61 @@ class LlmService {
                     "\nAssistant:",
                     "Human:",
                     "\nHuman:"
-                ], // Comprehensive stop sequences to prevent hallucinating conversation turns
+                ],
                 stream: LLM_STREAMING_ENABLED,
             };
+
+            if (structuredPrompt.image_data) {
+                // Multi-modal request
+                requestBody.prompt = null; // Clear simple prompt
+                requestBody.messages = [
+                    {
+                        role: "user",
+                        content: formattedPrompt,
+                        images: [structuredPrompt.image_data.data] // Assuming base64 string
+                    }
+                ];
+                // Adjust for specific API if needed (e.g. Ollama uses 'images' array in message)
+                // If using Gemini directly, structure might be different.
+                // Assuming standard Ollama/OpenAI-vision compatible proxy.
+            } else {
+                // Text-only request
+                requestBody.prompt = formattedPrompt;
+            }
 
             return await this.circuitBreaker.execute(async () => {
                 let llmOutput = '';
                 let action = null;
 
+                // Start LLM latency tracking
+                latencyMonitor.startTimer(sessionId, 'llm_total');
+                latencyMonitor.startTimer(sessionId, 'llm_ttft');
+                let firstTokenReceived = false;
+
                 if (LLM_STREAMING_ENABLED && onPartialResponse) {
                     // Send a debug chunk to verify pipeline
-                    onPartialResponse({ type: 'debug', text: 'LLM_STREAM_START' } as any);
+                    await onPartialResponse({ type: 'debug', text: 'LLM_STREAM_START' } as any);
 
-                    const response = await axios.post(this.llmApiUrl + '/api/generate', requestBody, { headers, responseType: 'stream' });
+                    const response = await retryWithBackoff(
+                        () => axios.post(this.llmApiUrl + '/api/generate', requestBody, { headers, responseType: 'stream' }),
+                        3, 1000, 'LLM Stream Request'
+                    );
 
                     // Text Stabilization Buffer
                     let stabilizationBuffer = '';
 
                     await new Promise<void>((resolve, reject) => {
-                        response.data.on('data', (chunk: any) => {
+                        response.data.on('data', async (chunk: any) => {
                             try {
                                 const chunkData = JSON.parse(chunk.toString());
                                 if (chunkData.response) {
                                     const newContent = chunkData.response;
+
+                                    // Track Time To First Token (TTFT)
+                                    if (!firstTokenReceived && newContent.trim().length > 0) {
+                                        latencyMonitor.endTimer(sessionId, 'llm_ttft');
+                                        firstTokenReceived = true;
+                                    }
 
                                     // Validate: Check for malformed/garbage responses
                                     const isMalformed = /^[\.\*\s\?\!,;:]{1,3}$/.test(newContent.trim());
@@ -199,7 +232,7 @@ class LlmService {
                                                 stabilizationBuffer = '';
                                                 console.log(`[LLM Service] Sending FINAL: "${finalChunk}"`);
                                                 // @ts-ignore - Sending object instead of string
-                                                onPartialResponse({ type: 'final', text: finalChunk });
+                                                await onPartialResponse({ type: 'final', text: finalChunk });
                                             } else {
                                                 // Buffer does NOT end with delimiter (e.g. "start the mu")
                                                 // Find the last delimiter
@@ -215,25 +248,25 @@ class LlmService {
 
                                                     console.log(`[LLM Service] Sending FINAL: "${stablePart}"`);
                                                     // @ts-ignore
-                                                    onPartialResponse({ type: 'final', text: stablePart });
+                                                    await onPartialResponse({ type: 'final', text: stablePart });
 
                                                     if (unstablePart.length > 0) {
                                                         console.log(`[LLM Service] Sending PARTIAL: "${unstablePart}"`);
                                                         // @ts-ignore
-                                                        onPartialResponse({ type: 'partial', text: unstablePart });
+                                                        await onPartialResponse({ type: 'partial', text: unstablePart });
                                                     }
                                                 } else {
                                                     // No space yet, just send partial
                                                     console.log(`[LLM Service] Sending PARTIAL: "${stabilizationBuffer}"`);
                                                     // @ts-ignore
-                                                    onPartialResponse({ type: 'partial', text: stabilizationBuffer });
+                                                    await onPartialResponse({ type: 'partial', text: stabilizationBuffer });
                                                 }
                                             }
                                         } else {
                                             // No delimiters at all, send as partial
                                             console.log(`[LLM Service] Sending PARTIAL: "${stabilizationBuffer}"`);
                                             // @ts-ignore
-                                            onPartialResponse({ type: 'partial', text: stabilizationBuffer });
+                                            await onPartialResponse({ type: 'partial', text: stabilizationBuffer });
                                         }
                                     }
                                 }
@@ -241,17 +274,21 @@ class LlmService {
                                 this.logger.error(`Error parsing LLM streaming chunk: ${e.message}`);
                             }
                         });
-                        response.data.on('end', () => {
+                        response.data.on('end', async () => {
                             this.logger.debug('LLM streaming response ended.');
 
                             // Flush remaining buffer as final
                             if (stabilizationBuffer.length > 0) {
                                 console.log(`[LLM Service] Flushing FINAL: "${stabilizationBuffer}"`);
                                 // @ts-ignore
-                                onPartialResponse({ type: 'final', text: stabilizationBuffer });
+                                await onPartialResponse({ type: 'final', text: stabilizationBuffer });
                             }
 
                             console.log(`[LLM Service] Full Output: "${llmOutput}"`);
+                            
+                            // End LLM total latency tracking
+                            latencyMonitor.endTimer(sessionId, 'llm_total');
+                            
                             metrics.incLlmCall(sessionId, structuredPrompt.classified_intent, 'success');
                             auditService.logLlmEvent(userId, sessionId, structuredPrompt, { text: llmOutput }, 'success');
                             resolve();
@@ -264,7 +301,10 @@ class LlmService {
                         });
                     });
                 } else {
-                    const response = await axios.post(this.llmApiUrl + '/api/generate', requestBody, { headers });
+                    const response = await retryWithBackoff(
+                        () => axios.post(this.llmApiUrl + '/api/generate', requestBody, { headers }),
+                        3, 1000, 'LLM Request'
+                    );
                     llmOutput = response.data.response;
 
                     if (structuredPrompt.classified_intent === 'system_command' || structuredPrompt.classified_intent === 'utility_request') {
@@ -315,8 +355,8 @@ class LlmService {
             });
         }
 
-        // 3. Add Clear Separator and Current User Query (with emphasis)
-        promptParts.push(`\n--- CURRENT USER QUERY (ANSWER THIS) ---`);
+        // 3. Add Current User Query with clear separation
+        promptParts.push(`\n=== CURRENT INTERACTION ===`);
         promptParts.push(`User: ${structuredPrompt.current_user_query}`);
         promptParts.push(`Assistant:`);
 

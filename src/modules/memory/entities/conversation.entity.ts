@@ -13,6 +13,9 @@ export interface IConversationMessage extends Document {
         processingTime?: number;
         [key: string]: any;
     };
+    parentId?: string;
+    children?: string[];
+    branchIndex?: number;
     timestamp: Date;
     createdAt: Date;
 }
@@ -41,6 +44,19 @@ const conversationMessageSchema = new Schema({
         type: Schema.Types.Mixed,
         default: {}
     },
+    parentId: {
+        type: String,
+        default: null,
+        index: true
+    },
+    children: {
+        type: [String],
+        default: []
+    },
+    branchIndex: {
+        type: Number,
+        default: 0
+    },
     timestamp: {
         type: Date,
         default: Date.now,
@@ -55,6 +71,7 @@ const conversationMessageSchema = new Schema({
 conversationMessageSchema.index({ userId: 1, timestamp: -1 });
 conversationMessageSchema.index({ sessionId: 1, timestamp: 1 });
 conversationMessageSchema.index({ userId: 1, createdAt: 1 });
+conversationMessageSchema.index({ content: 'text' }); // Text index for search
 
 // TTL index for auto-deletion (30 days by default)
 // This will be set dynamically based on env config

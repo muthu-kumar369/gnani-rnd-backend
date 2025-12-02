@@ -50,7 +50,7 @@ export interface IPlugin extends PluginLifecycle {
     /**
      * Execute a tool from this plugin
      */
-    executeTool(toolName: string, parameters: any): Promise<ToolExecutionResult>;
+    executeTool(toolName: string, parameters: any, onProgress?: (update: { progress: number; message: string }) => void): Promise<ToolExecutionResult>;
 }
 
 /**

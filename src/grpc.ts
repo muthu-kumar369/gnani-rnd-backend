@@ -3,7 +3,7 @@ import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import { GRPC_PORT } from "./config/env.config.js";
 import logger from "./core/logger/logger.js";
-import sessionManager from "./modules/session/session.manager.js";
+import sessionManager, { Session } from "./modules/session/session.manager.js";
 import { fileURLToPath } from "url";
 import path from "path";
 
@@ -34,19 +34,21 @@ const StartSession = async (
 
   logger.debug('StartSession received call.request:', call.request);
   logger.debug('StartSession received call.metadata:', call.metadata);
-  const { user_id } = call.request;
-  try {
-    const onTranscriptionCallback = (transcript: string, isFinal: boolean) => {
-      logger.debug(
-        `StartSession callback received transcript for ${user_id}: ${transcript} (isFinal: ${isFinal})`
-      );
-    };
+    const { user_id, session_id } = call.request;
+    try {
+      const onTranscriptionCallback = (transcript: string, isFinal: boolean) => {
+        logger.debug(
+          `StartSession callback received transcript for ${user_id}: ${transcript} (isFinal: ${isFinal})`
+        );
+      };
 
-    const newSessionId = await sessionManager.startSession(
-      user_id,
-      onTranscriptionCallback,
-      undefined // onLlmChunkCallback not used for StartSession
-    );
+      const newSessionId = await sessionManager.startSession(
+        user_id,
+        onTranscriptionCallback,
+        undefined, // onLlmChunkCallback not used for StartSession
+        undefined, // onToolStatusCallback
+        session_id // Pass existing session ID if provided
+      );
     logger.debug(`Generated newSessionId: ${newSessionId}`);
     logger.info(
       `gRPC StartSession successful. New session ID: ${newSessionId} for user: ${user_id}`
@@ -77,10 +79,16 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
     sessionId: string,
     grpcCall: grpc.ServerDuplexStream<any, any>
   ) => {
+    const waitForDrain = (stream: grpc.ServerDuplexStream<any, any>): Promise<void> => {
+      return new Promise((resolve) => {
+        stream.once('drain', resolve);
+      });
+    };
+
     const session = sessionManager.getSession(sessionId);
     if (session) {
       session.metadata.grpcCall = grpcCall;
-      session.onTranscriptionCallback = (
+      session.onTranscriptionCallback = async (
         transcript: string,
         isFinal: boolean
       ) => {
@@ -89,14 +97,21 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
         );
         if (grpcCall) {
           logger.debug(`Writing to gRPC call for session ${sessionId}.`);
+          let ok = true;
           if (isFinal) {
-            grpcCall.write({
+            ok = grpcCall.write({
               final_text: transcript
             });
           } else {
-            grpcCall.write({
+            ok = grpcCall.write({
               partial_text: transcript
             });
+          }
+          
+          if (!ok) {
+            logger.warn(`gRPC buffer full for session ${sessionId} (transcription). Waiting for drain...`);
+            await waitForDrain(grpcCall);
+            logger.info(`gRPC buffer drained for session ${sessionId} (transcription).`);
           }
         } else {
           logger.warn(
@@ -105,16 +120,39 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
         }
       };
 
-      session.onLlmChunkCallback = (chunk: any) => {
+      session.onLlmChunkCallback = async (chunk: any) => {
         logger.debug(`onLlmChunkCallback triggered for session ${sessionId}. Chunk: ${JSON.stringify(chunk)}`);
         if (grpcCall) {
           // Serialize to JSON string to pass through gRPC string field
           const payload = typeof chunk === 'string' ? chunk : JSON.stringify(chunk);
-          grpcCall.write({
+          const ok = grpcCall.write({
             llm_chunk: payload
           });
+
+          if (!ok) {
+            logger.warn(`gRPC buffer full for session ${sessionId} (LLM chunk). Waiting for drain...`);
+            await waitForDrain(grpcCall);
+            logger.info(`gRPC buffer drained for session ${sessionId} (LLM chunk).`);
+          }
         } else {
           logger.warn(`grpcCall not available for session ${sessionId} in onLlmChunkCallback.`);
+        }
+      };
+
+      session.onToolStatusCallback = async (status: any) => {
+        logger.debug(`onToolStatusCallback triggered for session ${sessionId}. Status: ${status.status}`);
+        if (grpcCall) {
+          const ok = grpcCall.write({
+            tool_status: status
+          });
+
+          if (!ok) {
+            logger.warn(`gRPC buffer full for session ${sessionId} (tool status). Waiting for drain...`);
+            await waitForDrain(grpcCall);
+            logger.info(`gRPC buffer drained for session ${sessionId} (tool status).`);
+          }
+        } else {
+          logger.warn(`grpcCall not available for session ${sessionId} in onToolStatusCallback.`);
         }
       };
     }

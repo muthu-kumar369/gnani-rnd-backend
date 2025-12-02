@@ -189,7 +189,14 @@ class MemoryManager {
         }
 
         // Fallback to MongoDB
-        const messages = await shortTermMemory.getRecentMessages(userId, 20);
+        // CRITICAL FIX: Use getSessionMessages to scope context to the specific session
+        // instead of getRecentMessages which mixes all user conversations
+        const messages = await shortTermMemory.getSessionMessages(sessionId);
+        
+        // If session has no messages (new session), we might want to pull recent context 
+        // from other sessions ONLY if explicitly requested, but for now we stick to strict scoping
+        // as per user requirement.
+        
         const formattedMessages = this.formatMessages(messages);
 
         // Apply summarization if needed
@@ -212,7 +219,7 @@ class MemoryManager {
             await sessionMemory.cacheRecentMessages(sessionId, finalMessages);
         }
 
-        this.logger.debug(`Cache MISS for session ${sessionId}, loaded from MongoDB`);
+        this.logger.debug(`Cache MISS for session ${sessionId}, loaded ${finalMessages.length} messages from MongoDB`);
         return { messages: finalMessages, cacheHit: false };
     }
 

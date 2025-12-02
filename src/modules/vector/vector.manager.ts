@@ -2,6 +2,8 @@
 import { ChromaClient, Collection } from 'chromadb';
 import logger from '../../core/logger/logger.js';
 import axios from 'axios';
+import crypto from 'crypto';
+import redisClient from '../../config/redis.config.js';
 
 class VectorManager {
     private client: ChromaClient | null = null;
@@ -89,6 +91,14 @@ class VectorManager {
         }
     }
 
+    /**
+     * Generate cache key for query
+     */
+    private getCacheKey(userId: string, query: string, topK: number): string {
+        const hash = crypto.createHash('md5').update(`${userId}:${query}:${topK}`).digest('hex');
+        return `vector:cache:${hash}`;
+    }
+
     async getRelevantEmbeddings(userId: string, query: string, topK = 3): Promise<string[]> {
         if (!this.collection) {
             logger.warn('ChromaDB not initialized. Cannot retrieve embeddings.');
@@ -96,6 +106,19 @@ class VectorManager {
         }
 
         try {
+            // Check cache first
+            const cacheKey = this.getCacheKey(userId, query, topK);
+            const cachedResults = await redisClient.get(cacheKey);
+            
+            if (cachedResults) {
+                const results = JSON.parse(cachedResults);
+                logger.debug(`Vector search - Cache HIT for query "${query.substring(0, 50)}..."`);
+                return results;
+            }
+
+            logger.debug(`Vector search - Cache MISS for query "${query.substring(0, 50)}..."`);
+
+            // Cache miss - generate embedding and search
             const queryEmbedding = await this.generateEmbedding(query);
 
             const results = await this.collection.query({
@@ -104,11 +127,17 @@ class VectorManager {
                 where: { userId: userId },
             });
 
+            let documents: string[] = [];
             if (results.documents && results.documents.length > 0 && results.documents[0]) {
-                logger.debug(`Retrieved ${results.documents[0].length} relevant embeddings for query "${query}"`);
-                return results.documents[0] as string[];
+                documents = results.documents[0] as string[];
+                logger.debug(`Retrieved ${documents.length} relevant embeddings for query "${query}"`);
             }
-            return [];
+
+            // Cache results for 1 hour (3600 seconds)
+            await redisClient.setex(cacheKey, 3600, JSON.stringify(documents));
+            logger.debug(`Cached vector search results for query "${query.substring(0, 50)}..."`);
+
+            return documents;
         } catch (error: any) {
             logger.error(`Error retrieving embeddings: ${error.message}`);
             return [];

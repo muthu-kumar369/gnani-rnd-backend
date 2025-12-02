@@ -6,6 +6,7 @@ import path from 'path';
 import { createContextualLogger } from '../../core/logger/logger.js';
 import metrics from '../../core/monitoring/metrics.js';
 import auditService from '../../core/logger/audit.service.js';
+import latencyMonitor from '../../core/monitoring/latency.monitor.js';
 import { WHISPER_MODEL_PATH, WHISPER_LANGUAGE, WHISPER_SAMPLE_RATE, WHISPER_COMPUTE_TYPE, WHISPER_PYTHON_PATH } from '../../config/env.config.js';
 import { Logger } from 'winston';
 import { fileURLToPath } from 'url';
@@ -147,7 +148,21 @@ class WhisperService {
             return;
         }
 
-        this.transcriptionCallbacks.set(sessionId, onTranscription);
+        // Start STT timer when first chunk is sent
+        if (!this.transcriptionCallbacks.has(sessionId)) {
+            latencyMonitor.startTimer(sessionId, 'stt');
+        }
+
+        // Wrap callback to track latency
+        const wrappedCallback = (text: string, isFinal: boolean) => {
+            if (isFinal) {
+                // End STT timer on final transcription
+                latencyMonitor.endTimer(sessionId, 'stt');
+            }
+            onTranscription(text, isFinal);
+        };
+
+        this.transcriptionCallbacks.set(sessionId, wrappedCallback);
 
         const header = `${sessionId}:${isLastChunk ? 'LAST' : 'CHUNK'}:_`;
         const headerBuffer = Buffer.from(header, 'utf-8');

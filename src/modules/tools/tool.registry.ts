@@ -36,8 +36,8 @@ class ToolRegistry {
                         name: toolDef.name,
                         description: toolDef.description,
                         parameters: toolDef.parameters,
-                        execute: async (params: any) => {
-                            const result = await plugin.executeTool(toolDef.name, params);
+                        execute: async (params: any, onProgress?: (update: { progress: number; message: string }) => void) => {
+                            const result = await plugin.executeTool(toolDef.name, params, onProgress);
                             if (result.error) throw new Error(result.error);
                             return result.data;
                         }
@@ -73,7 +73,7 @@ class ToolRegistry {
         }));
     }
 
-    async executeTool(name: string, params: any): Promise<ToolExecutionResult> {
+    async executeTool(name: string, params: any, onProgress?: (status: any) => void): Promise<ToolExecutionResult> {
         const tool = this.tools.get(name);
         if (!tool) {
             return {
@@ -83,12 +83,50 @@ class ToolRegistry {
             };
         }
 
+        const startTime = Date.now();
+
+        // Emit starting status
+        onProgress?.({
+            tool_name: name,
+            status: 'starting',
+            progress: 0,
+            message: `Starting ${name}...`,
+            elapsed_ms: 0
+        });
+
         try {
             this.logger.debug(`Executing tool ${name} with params: ${JSON.stringify(params)}`);
 
             // Wrap execution in circuit breaker
             const data = await this.circuitBreaker.execute(async () => {
-                return await tool.execute(params);
+                // Emit running status just before execution
+                onProgress?.({
+                    tool_name: name,
+                    status: 'running',
+                    progress: 10,
+                    message: `Executing ${name}...`,
+                    elapsed_ms: Date.now() - startTime
+                });
+
+                return await tool.execute(params, (update) => {
+                    // Forward progress updates from the tool
+                    onProgress?.({
+                        tool_name: name,
+                        status: 'running',
+                        progress: update.progress,
+                        message: update.message,
+                        elapsed_ms: Date.now() - startTime
+                    });
+                });
+            });
+
+            // Emit completed status
+            onProgress?.({
+                tool_name: name,
+                status: 'completed',
+                progress: 100,
+                message: `Completed ${name}`,
+                elapsed_ms: Date.now() - startTime
             });
 
             return {
@@ -97,6 +135,16 @@ class ToolRegistry {
             };
         } catch (error: any) {
             this.logger.error(`Error executing tool ${name}: ${error.message}`);
+            
+            // Emit failed status
+            onProgress?.({
+                tool_name: name,
+                status: 'failed',
+                progress: 0,
+                message: `Failed: ${error.message}`,
+                elapsed_ms: Date.now() - startTime
+            });
+
             return {
                 toolName: name,
                 data: null,

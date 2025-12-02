@@ -17,14 +17,22 @@ export class SearchTool implements ITool {
     private logger = createContextualLogger({ module: 'SearchTool' });
     private apiKey = process.env.TAVILY_API_KEY; // Using Tavily as it's great for LLMs
 
-    async execute(params: any): Promise<any> {
+    async execute(params: any, onProgress?: (update: { progress: number; message: string }) => void): Promise<any> {
         const query = params.query;
         if (!query) {
             return { error: 'Query is required' };
         }
 
+        onProgress?.({ progress: 10, message: `Searching for "${query}"...` });
+
         if (!this.apiKey) {
             this.logger.warn('TAVILY_API_KEY is not set. Returning mock data.');
+            onProgress?.({ progress: 50, message: 'Simulating search results...' });
+            
+            // Simulate delay
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            onProgress?.({ progress: 90, message: 'Processing mock results...' });
             return {
                 query: query,
                 results: [
@@ -36,6 +44,7 @@ export class SearchTool implements ITool {
         }
 
         try {
+            onProgress?.({ progress: 30, message: 'Querying search engine...' });
             const response = await axios.post('https://api.tavily.com/search', {
                 api_key: this.apiKey,
                 query: query,
@@ -43,6 +52,8 @@ export class SearchTool implements ITool {
                 include_answer: true,
                 max_results: 3
             });
+
+            onProgress?.({ progress: 80, message: 'Processing search results...' });
 
             return {
                 query: query,
