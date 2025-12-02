@@ -10,7 +10,6 @@ import contextEngine from '../context/context.engine.js';
 import actionDispatcher from '../action/action-dispatcher.service.js';
 import llmService from '../llm/llm.service.js';
 import llmResponseParser from '../llm/llm-response.parser.js';
-import ttsService from '../tts/tts.service.js';
 import audioStreamer from '../../utils/audio.streamer.js';
 import toolRegistry from '../tools/tool.registry.js';
 import sessionMemory from '../memory/services/session-memory.service.js';
@@ -130,7 +129,6 @@ class SessionManager {
             this.sessions.delete(sessionId);
             whisperService.cleanupSession(sessionId);
             queryProcessor.clearSessionMemory(sessionId);
-            ttsService.cleanupSession(sessionId);
             audioStreamer.cleanupSession(sessionId);
 
             // Clean up memory system caches and Redis session state
@@ -287,15 +285,43 @@ class SessionManager {
                 const trimmedResponse = llmRawResponse.text.trim();
                 let toolCall = null;
 
-                // Check for Tool Call (JSON detection)
-                if (trimmedResponse.startsWith('{') && trimmedResponse.includes('"tool"')) {
+                // Enhanced Tool Call Detection with multiple extraction strategies
+                if (trimmedResponse.includes('"tool"') || trimmedResponse.includes('```json')) {
+                    let jsonContent = trimmedResponse;
+
+                    // Strategy 1: Extract from markdown code block
+                    const markdownMatch = trimmedResponse.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+                    if (markdownMatch) {
+                        jsonContent = markdownMatch[1].trim();
+                        this.logger.debug(`Extracted JSON from markdown code block: ${jsonContent}`);
+                    }
+                    // Strategy 2: Find first { to last }
+                    else if (trimmedResponse.includes('{')) {
+                        const firstBrace = trimmedResponse.indexOf('{');
+                        const lastBrace = trimmedResponse.lastIndexOf('}');
+                        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+                            jsonContent = trimmedResponse.substring(firstBrace, lastBrace + 1);
+                            this.logger.debug(`Extracted JSON from braces: ${jsonContent}`);
+                        }
+                    }
+
+                    // Try to parse the extracted JSON
                     try {
-                        const parsed = JSON.parse(trimmedResponse);
-                        if (parsed.tool && parsed.params) {
-                            toolCall = parsed;
+                        const parsed = JSON.parse(jsonContent);
+
+                        // Validate that it has required fields and tool exists in registry
+                        if (parsed.tool && parsed.params !== undefined) {
+                            // Check if tool exists in registry
+                            const toolExists = toolRegistry.getTool(parsed.tool);
+                            if (toolExists) {
+                                toolCall = parsed;
+                                this.logger.info(`Valid tool call detected: ${parsed.tool}`);
+                            } else {
+                                this.logger.warn(`Tool "${parsed.tool}" not found in registry. Available tools: ${toolRegistry.getAllTools().map(t => t.name).join(', ')}`);
+                            }
                         }
                     } catch (e) {
-                        this.logger.warn(`Failed to parse potential tool call: ${e}. Treating as text.`);
+                        this.logger.warn(`Failed to parse potential tool call JSON: ${e}. Content: ${jsonContent.substring(0, 100)}`);
                     }
                 }
 

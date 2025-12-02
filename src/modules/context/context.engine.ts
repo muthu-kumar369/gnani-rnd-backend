@@ -81,11 +81,59 @@ class ContextEngine {
         logger.debug(`Selected template: ${selectedTemplate.name}`);
 
         // PHASE 2: Integrated Tool Routing
-        // Append tool definitions to system message
-        let systemMessage = selectedTemplate.systemMessage;
+        // Build system message with proper priority order
+        let systemMessage = '';
+
+        // 1. CRITICAL RULES (highest priority - anti-repetition, focus)
+        systemMessage += `CRITICAL RULES:
+1. Focus ONLY on the user's CURRENT query (shown at the end of this prompt)
+2. Do NOT repeat information from previous responses unless explicitly asked
+3. Do NOT greet the user unless this is the first message in the conversation
+4. Previous conversation history is for context only, not your primary focus
+5. Answer concisely and directly
+
+`;
+
+        // 2. TOOL INSTRUCTIONS (if tools available - second highest priority)
         if (toolDefinitions.length > 0) {
             const toolsJson = JSON.stringify(toolDefinitions, null, 2);
-            systemMessage += `\n\n# AVAILABLE TOOLS\nYou have access to the following tools. Use them when necessary to fulfill the user's request.\n${toolsJson}\n\n# TOOL USE INSTRUCTIONS\nIf you need to use a tool, your response MUST be a valid JSON object matching this schema:\n{\n  "tool": "tool_name",\n  "params": { ... }\n}\n\nIf no tool is needed, respond naturally with text.`;
+            systemMessage += `# AVAILABLE TOOLS
+You have access to the following tools. Use them when necessary to fulfill the user's request.
+
+${toolsJson}
+
+# TOOL USE INSTRUCTIONS
+When you need to use a tool, your response MUST be ONLY a valid JSON object in this exact format:
+\`\`\`json
+{
+  "tool": "tool_name",
+  "params": { ... }
+}
+\`\`\`
+
+Examples of when to use tools:
+- "What time is it?" → Use get_current_time tool
+- "What's today's date?" → Use get_current_date tool  
+- "What's the weather in London?" → Use get_weather tool
+- "Calculate 25 * 4" → Use calculator tool
+- "Search for AI news" → Use web_search tool
+
+If no tool is needed, respond naturally with text (do NOT output JSON).
+
+`;
+        }
+
+        // 3. IDENTITY & CAPABILITIES (base system message from template)
+        systemMessage += selectedTemplate.systemMessage;
+
+        // 4. MEMORY CONTEXT (background only, clearly delimited)
+        if (longTermContextStr && longTermContextStr.trim()) {
+            systemMessage += `
+
+--- BACKGROUND CONTEXT (for reference only, use if relevant to current query) ---
+${longTermContextStr}
+--- END BACKGROUND CONTEXT ---
+`;
         }
 
         const llmPrompt = {
@@ -246,7 +294,11 @@ ${toolResult.error ? `Error: ${toolResult.error}` : `Output:\n${JSON.stringify(t
 INSTRUCTION
 ===========
 
+The tool has been executed. Now you MUST respond with NATURAL TEXT (NOT JSON).
+
 Use the tool output above to answer the user's query naturally and conversationally.
+- Do NOT output JSON
+- Do NOT call another tool
 - Do NOT just repeat the raw data
 - Format the information in a user-friendly way
 - If there was an error, explain it helpfully and suggest alternatives
@@ -254,7 +306,7 @@ Use the tool output above to answer the user's query naturally and conversationa
 
 User's Original Query: "${originalPrompt.current_user_query}"
 
-Your task: Provide a natural, helpful response using the tool data.
+Your task: Provide a natural, helpful response using the tool data above.
 `;
 
         // Prepend tool context to system message (higher priority than history)

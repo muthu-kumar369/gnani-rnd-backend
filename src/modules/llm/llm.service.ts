@@ -118,8 +118,8 @@ class LlmService {
                 max_tokens: LLM_MAX_TOKENS,
                 temperature: 0.7, // Balanced for natural conversation
                 top_p: 0.9,
-                frequency_penalty: 1.3, // Strongly discourage repetition
-                presence_penalty: 0.6,  // Encourage diverse topics
+                frequency_penalty: 1.5, // Strongly discourage repetition (increased from 1.3)
+                presence_penalty: 0.8,  // Encourage diverse topics (increased from 0.6)
                 stop: [
                     "User:",
                     "System:",
@@ -294,16 +294,18 @@ class LlmService {
         // 1. Construct the System Message Block
         let systemBlock = `System: ${structuredPrompt.system_message}`;
 
-        // Add context to system block if available
-        if (structuredPrompt.long_term_context && structuredPrompt.long_term_context.trim()) {
-            systemBlock += `\n\nRelevant Context from Memory:\n${structuredPrompt.long_term_context}`;
-        }
+        // Note: long_term_context is now embedded in system_message by context.engine
+        // So we don't add it again here
 
         promptParts.push(systemBlock);
 
-        // 2. Add Conversation History
+        // 2. Add Conversation History (limited to prevent context overload)
         if (structuredPrompt.conversation_history && structuredPrompt.conversation_history.length > 0) {
-            structuredPrompt.conversation_history.forEach((interaction: any) => {
+            // Limit to last 8 interactions (16 messages) to prevent overwhelming the context
+            const maxInteractions = 8;
+            const limitedHistory = structuredPrompt.conversation_history.slice(-maxInteractions);
+
+            limitedHistory.forEach((interaction: any) => {
                 if (interaction.query) {
                     promptParts.push(`User: ${interaction.query}`);
                 }
@@ -313,7 +315,8 @@ class LlmService {
             });
         }
 
-        // 3. Add Current User Query
+        // 3. Add Clear Separator and Current User Query (with emphasis)
+        promptParts.push(`\n--- CURRENT USER QUERY (ANSWER THIS) ---`);
         promptParts.push(`User: ${structuredPrompt.current_user_query}`);
         promptParts.push(`Assistant:`);
 

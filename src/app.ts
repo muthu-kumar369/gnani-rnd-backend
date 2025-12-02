@@ -3,9 +3,6 @@ import { startExpressServer } from './server.js';
 import { startGrpcServer } from './grpc.js';
 import connectDB from './config/database.config.js';
 import logger from './core/logger/logger.js';
-import { Server as SocketIOServer } from 'socket.io';
-import AssistantSocket from './websocket/assistant.socket.js';
-import UserSocket from './websocket/user.socket.js';
 import redisClient from './config/redis.config.js';
 import memoryCleanupJob from './jobs/memory-cleanup.job.js';
 import summarizationJob from './jobs/conversation-summarization.job.js';
@@ -26,19 +23,11 @@ redisClient.connect().then(() => {
 const httpServer = startExpressServer();
 startGrpcServer();
 
-// Initialize Socket.IO
-const io = new SocketIOServer(httpServer, {
-    cors: {
-        origin: "*", // Adjust as needed for your frontend URL
-        methods: ["GET", "POST"]
-    }
-});
-
-// Initialize Socket.IO handlers
-new AssistantSocket(io);
-new UserSocket(io);
-
 // Initialize background jobs
+logger.info('Initializing background jobs...');
+memoryCleanupJob.schedule();
+summarizationJob.schedule();
+logger.info('Background jobs scheduled successfully');
 logger.info('Initializing background jobs...');
 memoryCleanupJob.schedule();
 summarizationJob.schedule();

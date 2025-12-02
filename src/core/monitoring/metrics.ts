@@ -9,7 +9,6 @@ class Metrics {
     public activeSessionsGauge: client.Gauge;
     public whisperTranscriptionCounter: client.Counter;
     public llmCallCounter: client.Counter;
-    public ttsSynthesisCounter: client.Counter;
     public actionDispatchCounter: client.Counter;
     public cacheHitCounter: client.Counter;
     public cacheMissCounter: client.Counter;
@@ -53,13 +52,6 @@ class Metrics {
         });
         this.registry.registerMetric(this.llmCallCounter);
 
-        this.ttsSynthesisCounter = new client.Counter({
-            name: 'gnani_tts_syntheses_total',
-            help: 'Total number of TTS syntheses',
-            labelNames: ['sessionId', 'language', 'voice', 'status'],
-        });
-        this.registry.registerMetric(this.ttsSynthesisCounter);
-
         this.actionDispatchCounter = new client.Counter({
             name: 'gnani_action_dispatches_total',
             help: 'Total number of system action dispatches',
@@ -102,10 +94,6 @@ class Metrics {
 
     incLlmCall(sessionId: string, intent: string, status: string): void {
         this.llmCallCounter.inc({ sessionId, intent, status });
-    }
-
-    incTtsSynthesis(sessionId: string, language: string, voice: string, status: string): void {
-        this.ttsSynthesisCounter.inc({ sessionId, language, voice, status });
     }
 
     incActionDispatch(sessionId: string, action: string, status: string): void {

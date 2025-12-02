@@ -304,8 +304,8 @@ class MemoryManager {
 
     /**
      * Hybrid RAG scoring: Combines semantic similarity, recency, and keyword matching
-     * - Semantic similarity: 50% weight
-     * - Recency: 30% weight
+     * - Semantic similarity: 40% weight (reduced to prevent old similar content from dominating)
+     * - Recency: 40% weight (increased to prioritize recent context)
      * - Keyword matching: 20% weight
      */
     private rankMemoriesHybridRAG(
@@ -317,16 +317,27 @@ class MemoryManager {
         const rankedMemories: RankedMemory[] = [];
         const queryLower = currentQuery.toLowerCase();
         const queryKeywords = this.extractKeywords(queryLower);
+        const now = Date.now();
 
         // Process short-term messages
         shortTermMessages.forEach((msg, index) => {
             const content = typeof msg === 'string' ? msg : JSON.stringify(msg);
             const contentLower = content.toLowerCase();
 
-            // 1. Recency score (30% weight) - more recent = higher score
-            const recencyScore = 1.0 - (index / Math.max(shortTermMessages.length, 1)) * 0.5; // 0.5 to 1.0
+            // 1. Recency score (40% weight) - more recent = higher score
+            let recencyScore = 1.0 - (index / Math.max(shortTermMessages.length, 1)) * 0.5; // 0.5 to 1.0
 
-            // 2. Semantic similarity (50% weight) - using Jaccard similarity
+            // BOOST: Very recent messages (last 5 minutes) get extra weight
+            if (msg.timestamp) {
+                const ageMinutes = (now - new Date(msg.timestamp).getTime()) / (1000 * 60);
+                if (ageMinutes < 5) {
+                    recencyScore *= 1.5; // 50% boost for very recent
+                } else if (ageMinutes < 60) {
+                    recencyScore *= 1.2; // 20% boost for recent (last hour)
+                }
+            }
+
+            // 2. Semantic similarity (40% weight) - using Jaccard similarity
             const semanticScore = this.calculateJaccardSimilarity(queryLower, contentLower);
 
             // 3. Keyword matching (20% weight)
