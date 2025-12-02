@@ -38,6 +38,17 @@ services:
     command: redis-server --appendonly yes
     restart: always
 
+  tei-embedding:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    container_name: tei-embedding
+    ports:
+      - "8080:80"
+    volumes:
+      - ./data/models/all-MiniLM-L6-v2/onnx:/data
+    shm_size: 1g
+    command: --model-id /data --port 80
+    restart: always
+
 volumes:
   mongodb_data:
   chromadb_data:

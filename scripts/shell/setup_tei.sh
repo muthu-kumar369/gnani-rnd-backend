@@ -73,33 +73,5 @@ if [ -f "$MODEL_DIR/onnx/model.onnx" ]; then
 fi
 
 # 4. Run Docker Container
-echo "Starting TEI Docker container..."
-
-# Check if container exists
-if docker ps -a --format '{{.Names}}' | grep -Eq "^${CONTAINER_NAME}\$"; then
-    echo "Stopping and removing existing container..."
-    docker rm -f "$CONTAINER_NAME"
-fi
-
-# Get absolute path for volume mount (WSL compatibility)
-# In WSL, PWD might be /mnt/d/..., which Docker understands
-ABS_MODEL_DIR="$(cd "$MODEL_DIR/onnx" && pwd)"
-
-echo "Mounting model from: $ABS_MODEL_DIR"
-
-docker run -d \
-  -p 8080:80 \
-  -v "$ABS_MODEL_DIR:/data" \
-  --name "$CONTAINER_NAME" \
-  --shm-size 1g \
-  --restart always \
-  "$IMAGE_NAME" \
-  --model-id /data \
-  --port 80
-
-if [ $? -eq 0 ]; then
-    echo "TEI container started successfully."
-else
-    echo "Error: Failed to start TEI container."
-    exit 1
-fi
+echo "Model setup complete."
+echo "Please run 'docker-compose up -d' to start the TEI service along with other backend services."
