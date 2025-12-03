@@ -33,6 +33,8 @@ class SessionManager {
     private logger: Logger;
     private sessions: Map<string, Session>;
     private SESSION_TIMEOUT_MS: number;
+    private MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB limit
+    private BUFFER_WARNING_SIZE = 8 * 1024 * 1024; // 8MB warning (80% of max)
 
     constructor() {
         this.logger = createContextualLogger({ module: 'SessionManager' });
@@ -103,7 +105,48 @@ class SessionManager {
                 isSpeaking: true
             }).catch(err => this.logger.error(`Failed to update Redis session state: ${err.message}`));
 
+            // Calculate current buffer size BEFORE appending
+            const currentSize = session.audioBuffer.reduce((sum, buf) => sum + buf.length, 0);
+            const newSize = currentSize + audioChunk.length;
+
+            // Check for buffer overflow
+            if (newSize > this.MAX_BUFFER_SIZE) {
+                this.logger.error('Audio buffer overflow detected', {
+                    sessionId,
+                    currentSize,
+                    newSize,
+                    maxSize: this.MAX_BUFFER_SIZE
+                });
+                
+                // Auto-flush to prevent crash
+                await this.flushAudioBuffer(sessionId);
+                
+                // Emit warning to frontend via callback
+                if (session.onTranscriptionCallback) {
+                    Promise.resolve(session.onTranscriptionCallback('⚠️ Audio buffer overflow - processing...', false)).catch(err => {
+                        this.logger.error(`Error in overflow warning callback: ${err.message}`);
+                    });
+                }
+                
+                metrics.incrementAudioBufferOverflow(sessionId);
+            }
+            
+            // Warning at 80% capacity
+            if (newSize > this.BUFFER_WARNING_SIZE && currentSize <= this.BUFFER_WARNING_SIZE) {
+                this.logger.warn('Audio buffer approaching limit', {
+                    sessionId,
+                    currentSize: newSize,
+                    maxSize: this.MAX_BUFFER_SIZE,
+                    percentFull: Math.round((newSize / this.MAX_BUFFER_SIZE) * 100)
+                });
+                metrics.incrementAudioBufferWarning(sessionId);
+            }
+
             session.audioBuffer.push(audioChunk); // Directly push the audioChunk
+
+            // Track buffer metrics
+            // Track buffer metrics
+            metrics.setAudioBufferSize(sessionId, newSize);
 
             whisperService.sendAudioChunk(sessionId, audioChunk, (transcript: string, isFinal: boolean) => {
                 this.logger.debug(`[SessionManager] Raw transcript from Whisper for ${sessionId}: "${transcript}" (isFinal: ${isFinal})`);
@@ -120,7 +163,7 @@ class SessionManager {
                     });
                 }
             }, false);
-            this.logger.debug(`Appended audio chunk to session ${sessionId}. Buffer size: ${session.audioBuffer.length}`);
+            this.logger.debug(`Appended audio chunk to session ${sessionId}. Buffer size: ${newSize} bytes (${session.audioBuffer.length} chunks)`);
         } else {
             this.logger.warn(`Attempted to append audio to non-existent session: ${sessionId}`);
             auditService.logEvent('AUDIO_CHUNK_APPEND', null, sessionId, { reason: 'Session not found' }, 'failure');
@@ -132,7 +175,53 @@ class SessionManager {
         if (session) {
             session.audioBuffer = [];
             this.logger.debug(`Audio buffer cleared for session: ${sessionId}`);
+            this.logger.debug(`Audio buffer cleared for session: ${sessionId}`);
+            metrics.setAudioBufferSize(sessionId, 0);
         }
+    }
+
+    /**
+     * Flush audio buffer to Whisper service
+     * Used for overflow protection and manual flushing
+     */
+    private async flushAudioBuffer(sessionId: string): Promise<void> {
+        const session = this.sessions.get(sessionId);
+        if (!session || session.audioBuffer.length === 0) return;
+        
+        this.logger.info('Flushing audio buffer', { 
+            sessionId,
+            bufferSize: session.audioBuffer.reduce((sum, buf) => sum + buf.length, 0),
+            chunks: session.audioBuffer.length
+        });
+        
+        // Process accumulated audio
+        const combinedBuffer = Buffer.concat(session.audioBuffer);
+        
+        // Send to Whisper for transcription
+        whisperService.sendAudioChunk(sessionId, combinedBuffer, (transcript: string, isFinal: boolean) => {
+            if (session.onTranscriptionCallback && transcript !== 'ACK') {
+                Promise.resolve(session.onTranscriptionCallback(transcript, true)).catch(err => {
+                    this.logger.error(`Error in flush callback: ${err.message}`);
+                });
+            }
+        }, true);
+        
+        // Clear buffer
+        session.audioBuffer = [];
+        // Clear buffer
+        session.audioBuffer = [];
+        metrics.setAudioBufferSize(sessionId, 0);
+    }
+
+    /**
+     * Get buffer statistics for monitoring
+     */
+    getBufferStats(sessionId: string): { size: number; chunks: number } {
+        const session = this.sessions.get(sessionId);
+        if (!session) return { size: 0, chunks: 0 };
+        
+        const size = session.audioBuffer.reduce((sum, buf) => sum + buf.length, 0);
+        return { size, chunks: session.audioBuffer.length };
     }
 
     endSession(sessionId: string): boolean {

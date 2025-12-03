@@ -11,22 +11,33 @@ import { cleanupJob } from './jobs/cleanup.job.js';
 import { mongoDBCleanupJob } from './jobs/mongodb-cleanup.job.js';
 // Phase 4: Task queue worker
 import { toolWorker } from './queues/tool.queue.js';
+// Month-2: Monitoring and graceful shutdown
+import { startTracing } from './core/monitoring/tracing.js';
+import shutdownManager from './core/shutdown/shutdown-manager.js';
+import metrics from './core/monitoring/metrics.js';
 
-logger.info('App initialization process started, checking for reloads...');
+// Initialize services
+(async () => {
+    try {
+        // Connect to Redis
+        try {
+            await redisClient.connect();
+            logger.info('Redis client connected successfully');
+        } catch (err: any) {
+            logger.error(`Redis connection failed: ${err.message}`);
+            // Continue even if Redis fails? Or exit? Usually better to continue if cache is optional, but for session it might be critical.
+            // Given previous code just logged error, we'll keep it non-fatal for now, but await it.
+        }
 
-// Connect to MongoDB
-connectDB();
+        // Connect to MongoDB
+        await connectDB();
 
-// Connect to Redis
-redisClient.connect().then(() => {
-    logger.info('Redis client connected successfully');
-}).catch((err: Error) => {
-    logger.error(`Redis connection failed: ${err.message}`);
-});
+        // Start Express.js server and get the http.Server instance
+        const httpServer = startExpressServer();
+        startGrpcServer();
 
-// Start Express.js server and get the http.Server instance
-const httpServer = startExpressServer();
-startGrpcServer();
+// Month-2: Register HTTP server with shutdown manager
+shutdownManager.setHttpServer(httpServer);
 
 // Initialize background jobs
 logger.info('Initializing background jobs...');
@@ -43,5 +54,34 @@ logger.info('Phase 4 task queue worker started');
 
 logger.info('Background jobs scheduled successfully');
 logger.info('GNANI Backend application started.');
+
+// Month-2: Register graceful shutdown handlers
+process.on('SIGTERM', () => {
+    logger.info('Received SIGTERM signal');
+    shutdownManager.shutdown('SIGTERM');
+});
+
+process.on('SIGINT', () => {
+    logger.info('Received SIGINT signal');
+    shutdownManager.shutdown('SIGINT');
+});
+
+process.on('uncaughtException', (error) => {
+    logger.error('Uncaught Exception', { error: error.message, stack: error.stack });
+    shutdownManager.shutdown('UNCAUGHT_EXCEPTION');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    logger.error('Unhandled Rejection', { reason, promise });
+    shutdownManager.shutdown('UNHANDLED_REJECTION');
+});
+
+logger.info('Graceful shutdown handlers registered');
+
+    } catch (error: any) {
+        logger.error('Failed to start application', { error: error.message, stack: error.stack });
+        process.exit(1);
+    }
+})();
 
 

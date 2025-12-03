@@ -73,6 +73,16 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# --- 4d. Setup Month 3 (Whisper.cpp, Caching, Production) ---
+echo ""
+echo "--- Step 4d/6: Setting up Month 3 (Whisper.cpp, Caching) ---"
+chmod +x scripts/shell/setup_month3.sh
+scripts/shell/setup_month3.sh
+if [ $? -ne 0 ]; then
+    echo "Error: Month 3 setup failed. Exiting."
+    exit 1
+fi
+
 # --- 5. Verify Setup ---
 echo ""
 echo "--- Step 5/6: Verifying GNANI Backend Setup ---"

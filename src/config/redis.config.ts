@@ -17,6 +17,7 @@ const redisClient = new Redis({
     return true;
   },
   lazyConnect: true, // Don't connect immediately, wait for explicit connect() call
+  maxRetriesPerRequest: null, // Required for BullMQ
 });
 
 // Event handlers

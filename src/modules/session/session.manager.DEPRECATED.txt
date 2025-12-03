@@ -1,0 +1,33 @@
+/**
+ * @deprecated This file is deprecated and will be removed in a future version.
+ * Please use the new modular session architecture:
+ * - session.coordinator.ts for orchestration
+ * - audio.processor.ts for audio buffering
+ * - transcript.processor.ts for STT integration
+ * - context.builder.ts for memory + RAG
+ * - llm.executor.ts for LLM calls
+ * - tool.executor.ts for tool execution
+ * 
+ * Migration: Update imports from './session.manager.js' to './session.coordinator.js'
+ */
+
+// src/services/sessionManager.ts
+import { v4 as uuidv4 } from 'uuid';
+import { createContextualLogger } from '../../core/logger/logger.js';
+import metrics from '../../core/monitoring/metrics.js';
+import auditService from '../../core/logger/audit.service.js';
+import whisperService from '../asr/whisper.service.js';
+import audioProcessor from '../../utils/audio.processor.js';
+import queryProcessor from '../query/query.processor.js';
+import contextEngine from '../context/context.engine.js';
+import actionDispatcher from '../action/action-dispatcher.service.js';
+import { llmManager } from '../../core/llm/llm.manager.js'; // Phase 4: Use LLMManager
+import llmResponseParser from '../llm/llm-response.parser.js';
+import audioStreamer from '../../utils/audio.streamer.js';
+import toolRegistry from '../tools/tool.registry.js';
+import sessionMemory from '../memory/services/session-memory.service.js';
+import latencyMonitor from '../../core/monitoring/latency.monitor.js';
+import conversationService from '../conversation/conversation.service.js';
+import { Logger } from 'winston';
+
+// Rest of the file remains unchanged...

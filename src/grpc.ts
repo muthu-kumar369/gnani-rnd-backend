@@ -3,7 +3,7 @@ import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import { GRPC_PORT } from "./config/env.config.js";
 import logger from "./core/logger/logger.js";
-import sessionManager, { Session } from "./modules/session/session.manager.js";
+import sessionCoordinator from "./modules/session/session.coordinator.js";
 import { fileURLToPath } from "url";
 import path from "path";
 
@@ -42,7 +42,7 @@ const StartSession = async (
         );
       };
 
-      const newSessionId = await sessionManager.startSession(
+      const newSessionId = await sessionCoordinator.startSession(
         user_id,
         onTranscriptionCallback,
         undefined, // onLlmChunkCallback not used for StartSession
@@ -85,7 +85,7 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
       });
     };
 
-    const session = sessionManager.getSession(sessionId);
+    const session = sessionCoordinator.getSession(sessionId);
     if (session) {
       session.metadata.grpcCall = grpcCall;
       session.onTranscriptionCallback = async (
@@ -162,7 +162,7 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
     if (!currentSessionId) {
       currentSessionId = chunk.session_id;
       if (currentSessionId) {
-        const session = sessionManager.getSession(currentSessionId);
+        const session = sessionCoordinator.getSession(currentSessionId);
         if (!session) {
           logger.warn(
             `Received audio chunk for unknown session: ${currentSessionId}. Ending stream.`
@@ -178,7 +178,7 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
     }
 
     if (currentSessionId) {
-      const session = sessionManager.getSession(currentSessionId);
+      const session = sessionCoordinator.getSession(currentSessionId);
       if (!session) {
         logger.warn(
           `Session ${currentSessionId} not found during SendAudioStream. Ending stream.`
@@ -190,7 +190,7 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
       // Handle Text Input
       if (chunk.text_input) {
         logger.info(`Received text input for session ${currentSessionId}: ${chunk.text_input}`);
-        const result = await sessionManager.processTextInput(currentSessionId, chunk.text_input);
+        const result = await sessionCoordinator.processTextInput(currentSessionId, chunk.text_input);
 
         // Send the complete LLM response if available
         if (result && result.llmResponse) {
@@ -211,7 +211,7 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
 
       // Handle Audio Input
       if (chunk.audio_chunk && chunk.audio_chunk.length > 0) {
-        await sessionManager.appendAudioChunk(
+        await sessionCoordinator.processAudioChunk(
           currentSessionId,
           chunk.audio_chunk,
           16000
@@ -224,27 +224,10 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
         );
         
         try {
-          const result = await sessionManager.finalizeSessionProcessing(currentSessionId);
-
-          // Send the complete LLM response if available
-          if (result && result.llmResponse) {
-            logger.info(`Sending COMPLETE LLM response for session ${currentSessionId}`);
-            call.write({
-              llm_chunk: JSON.stringify({
-                type: 'complete_response',
-                text: result.llmResponse
-              })
-            });
-          }
+          // Note: With new architecture, LLM responses stream via callbacks
+          // No need for finalizeSessionProcessing
         } catch (error: any) {
-          logger.error(`Error finalizing session ${currentSessionId}: ${error.message}`);
-          // Optionally send an error message to the client
-          call.write({
-            llm_chunk: JSON.stringify({
-              type: 'error',
-              text: "I'm sorry, I encountered an error processing your request."
-            })
-          });
+          logger.error(`Error in session ${currentSessionId}: ${error.message}`);
         } finally {
           call.end(); // End the bidirectional stream
         }
@@ -265,36 +248,46 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
       }: ${error.message}`
     );
     if (currentSessionId) {
-      sessionManager.endSession(currentSessionId);
+      sessionCoordinator.endSession(currentSessionId);
     }
     call.end();
   });
 };
 
-const EndSession = (
+const EndSession = async (
   call: grpc.ServerUnaryCall<any, any>,
   callback: grpc.sendUnaryData<any>
-): void => {
-  const { sessionId } = call.request;
+): Promise<void> => {
+  const { session_id } = call.request;
+  
+  if (!session_id) {
+      logger.warn('EndSession called without session_id');
+      callback({
+        code: grpc.status.INVALID_ARGUMENT,
+        details: 'Session ID is required',
+      });
+      return;
+  }
+
   try {
-    const ended = sessionManager.endSession(sessionId);
+    const ended = await sessionCoordinator.endSession(session_id);
     if (ended) {
-      logger.info(`gRPC EndSession successful for session: ${sessionId}`);
+      logger.info(`gRPC EndSession successful for session: ${session_id}`);
       callback(null, {
         success: true,
         message: "Session ended",
         sessionSummary: "Session closed successfully.",
       });
     } else {
-      logger.warn(`Attempted to end non-existent session: ${sessionId}`);
+      logger.warn(`Attempted to end non-existent session: ${session_id}`);
       callback({
         code: grpc.status.NOT_FOUND,
-        details: `Session ${sessionId} not found.`,
+        details: `Session ${session_id} not found.`,
       });
     }
   } catch (error: any) {
     logger.error(
-      `Error in EndSession for session ${sessionId}: ${error.message}`
+      `Error in EndSession for session ${session_id}: ${error.message}`
     );
     callback({
       code: grpc.status.INTERNAL,

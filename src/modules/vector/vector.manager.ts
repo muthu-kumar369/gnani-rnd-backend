@@ -76,6 +76,8 @@ class VectorManager {
                 inputs: text,
                 normalize: true,
                 truncate: true
+            }, {
+                timeout: 2000 // 2 second timeout
             });
             
             // TEI returns an array of arrays for batch, or single array? 
@@ -121,11 +123,18 @@ class VectorManager {
             // Cache miss - generate embedding and search
             const queryEmbedding = await this.generateEmbedding(query);
 
-            const results = await this.collection.query({
+            // Add timeout to vector search
+            const searchPromise = this.collection.query({
                 queryEmbeddings: [queryEmbedding],
                 nResults: topK,
                 where: { userId: userId },
             });
+
+            const timeoutPromise = new Promise<any>((_, reject) => 
+                setTimeout(() => reject(new Error('Vector search timed out')), 2000)
+            );
+
+            const results = await Promise.race([searchPromise, timeoutPromise]);
 
             let documents: string[] = [];
             if (results.documents && results.documents.length > 0 && results.documents[0]) {

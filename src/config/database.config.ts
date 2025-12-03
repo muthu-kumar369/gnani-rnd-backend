@@ -12,7 +12,6 @@ const connectDB = async (): Promise<void> => {
             process.exit(1);
         }
         await mongoose.connect(MONGODB_URI);
-        await mongoose.connect(MONGODB_URI);
         logger.info('MongoDB connected successfully');
 
         // Fix for duplicate key error on devices.deviceId

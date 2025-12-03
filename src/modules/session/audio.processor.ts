@@ -1,0 +1,122 @@
+// src/modules/session/audio.processor.ts
+import { createContextualLogger } from '../../core/logger/logger.js';
+import whisperService from '../asr/whisper.service.js';
+import whisperCppService from '../asr/whisper-cpp.service.js';
+import FEATURE_FLAGS from '../../config/feature-flags.js';
+import metrics from '../../core/monitoring/metrics.js';
+import { Logger } from 'winston';
+
+interface AudioSession {
+    buffer: Buffer[];
+    sampleRate: number;
+}
+
+export class AudioProcessor {
+    private logger: Logger;
+    private sessions: Map<string, AudioSession> = new Map();
+    private MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB
+    private BUFFER_WARNING_SIZE = 8 * 1024 * 1024; // 8MB
+    
+    // Month-3: Select STT service based on feature flag
+    private sttService = FEATURE_FLAGS.USE_WHISPER_CPP ? whisperCppService : whisperService;
+
+    constructor() {
+        this.logger = createContextualLogger({ module: 'AudioProcessor' });
+        
+        const serviceName = FEATURE_FLAGS.USE_WHISPER_CPP ? 'Whisper.cpp' : 'Python Whisper';
+        this.logger.info(`AudioProcessor initialized with ${serviceName}`);
+    }
+
+    async initialize(sessionId: string): Promise<void> {
+        this.sessions.set(sessionId, {
+            buffer: [],
+            sampleRate: 16000
+        });
+        
+        this.logger.debug('Audio session initialized', { sessionId });
+    }
+
+    async appendChunk(
+        sessionId: string, 
+        chunk: Buffer, 
+        sampleRate: number,
+        onTranscript?: (transcript: string, isFinal: boolean) => void
+    ): Promise<void> {
+        const session = this.sessions.get(sessionId);
+        if (!session) {
+            throw new Error(`Audio session ${sessionId} not found`);
+        }
+
+        // Update sample rate if changed
+        session.sampleRate = sampleRate;
+
+        // Check buffer size BEFORE appending
+        const currentSize = session.buffer.reduce((sum, buf) => sum + buf.length, 0);
+        const newSize = currentSize + chunk.length;
+
+        // Check for overflow
+        if (newSize > this.MAX_BUFFER_SIZE) {
+            this.logger.warn('Buffer overflow, flushing', { sessionId, size: newSize });
+            await this.flush(sessionId);
+            metrics.incrementAudioBufferOverflow(sessionId);
+        }
+        
+        // Warning at 80% capacity
+        if (newSize > this.BUFFER_WARNING_SIZE && currentSize <= this.BUFFER_WARNING_SIZE) {
+            this.logger.warn('Audio buffer approaching limit', {
+                sessionId,
+                currentSize: newSize,
+                maxSize: this.MAX_BUFFER_SIZE,
+                percentFull: Math.round((newSize / this.MAX_BUFFER_SIZE) * 100)
+            });
+            metrics.incrementAudioBufferWarning(sessionId);
+        }
+
+        session.buffer.push(chunk);
+
+        // Track buffer metrics
+        // Track buffer metrics
+        metrics.setAudioBufferSize(sessionId, newSize);
+
+        // Send to Whisper for streaming transcription (using selected service)
+        if (onTranscript) {
+            this.sttService.sendAudioChunk(sessionId, chunk, (transcript: string, isFinal: boolean) => {
+                if (transcript !== 'ACK') {
+                    onTranscript(transcript, isFinal);
+                }
+            }, false);
+        }
+    }
+
+    async flush(sessionId: string): Promise<void> {
+        const session = this.sessions.get(sessionId);
+        if (!session || session.buffer.length === 0) return;
+
+        const combinedBuffer = Buffer.concat(session.buffer);
+        
+        this.logger.debug('Audio buffer flushed', { 
+            sessionId,
+            bufferSize: combinedBuffer.length,
+            chunks: session.buffer.length
+        });
+        
+        // Clear buffer
+        // Clear buffer
+        session.buffer = [];
+        metrics.setAudioBufferSize(sessionId, 0);
+    }
+
+    async cleanup(sessionId: string): Promise<void> {
+        this.sessions.delete(sessionId);
+        this.logger.debug('Audio session cleaned up', { sessionId });
+        metrics.setAudioBufferSize(sessionId, 0);
+    }
+
+    getBufferStats(sessionId: string): { size: number; chunks: number } {
+        const session = this.sessions.get(sessionId);
+        if (!session) return { size: 0, chunks: 0 };
+
+        const size = session.buffer.reduce((sum, buf) => sum + buf.length, 0);
+        return { size, chunks: session.buffer.length };
+    }
+}

@@ -23,6 +23,9 @@ export class OllamaProvider implements LLMProvider {
 
     async *generate(prompt: string, options?: GenerateOptions): AsyncIterableIterator<string> {
         try {
+            logger.info(`Ollama Request: URL=${this.baseUrl}/api/generate, Model=${this.model}`);
+            logger.info(`Ollama Prompt Preview: ${prompt.substring(0, 100)}...`);
+            
             const response = await axios.post(
                 `${this.baseUrl}/api/generate`,
                 {
@@ -49,7 +52,13 @@ export class OllamaProvider implements LLMProvider {
                 if (data.done) break;
             }
         } catch (error: any) {
-            logger.error('Ollama generation failed', error, { prompt: prompt.substring(0, 100) });
+            logger.error('Ollama generation failed', { 
+                error: error.message,
+                status: error.response?.status,
+                statusText: error.response?.statusText,
+                url: `${this.baseUrl}/api/generate`,
+                model: this.model
+            });
             throw new Error(`Ollama generation failed: ${error.message}`);
         }
     }
