@@ -55,7 +55,7 @@ fi
 
 # --- 4b. Setup TEI (Embedding Service) ---
 echo ""
-echo "--- Step 4b/5: Setting up TEI (Text Embeddings Inference) ---"
+echo "--- Step 4b/6: Setting up TEI (Text Embeddings Inference) ---"
 chmod +x scripts/shell/setup_tei.sh
 scripts/shell/setup_tei.sh
 if [ $? -ne 0 ]; then
@@ -63,9 +63,19 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# --- 4c. Setup Phase 4 Foundation Improvements ---
+echo ""
+echo "--- Step 4c/6: Setting up Phase 4 Foundation (LLM Abstraction, Testing, Task Queue, Memory Cleanup) ---"
+chmod +x scripts/shell/setup_phase4.sh
+scripts/shell/setup_phase4.sh
+if [ $? -ne 0 ]; then
+    echo "Error: Phase 4 setup failed. Exiting."
+    exit 1
+fi
+
 # --- 5. Verify Setup ---
 echo ""
-echo "--- Step 5/5: Verifying GNANI Backend Setup ---"
+echo "--- Step 5/6: Verifying GNANI Backend Setup ---"
 scripts/shell/verify_setup.sh
 if [ $? -ne 0 ]; then
     echo "Verification completed with failures. Please review the logs above."

@@ -6,6 +6,11 @@ import logger from './core/logger/logger.js';
 import redisClient from './config/redis.config.js';
 import memoryCleanupJob from './jobs/memory-cleanup.job.js';
 import summarizationJob from './jobs/conversation-summarization.job.js';
+// Phase 4: Cleanup jobs
+import { cleanupJob } from './jobs/cleanup.job.js';
+import { mongoDBCleanupJob } from './jobs/mongodb-cleanup.job.js';
+// Phase 4: Task queue worker
+import { toolWorker } from './queues/tool.queue.js';
 
 logger.info('App initialization process started, checking for reloads...');
 
@@ -27,11 +32,16 @@ startGrpcServer();
 logger.info('Initializing background jobs...');
 memoryCleanupJob.schedule();
 summarizationJob.schedule();
-logger.info('Background jobs scheduled successfully');
-logger.info('Initializing background jobs...');
-memoryCleanupJob.schedule();
-summarizationJob.schedule();
-logger.info('Background jobs scheduled successfully');
 
+// Phase 4: Start cleanup jobs
+cleanupJob.start();
+mongoDBCleanupJob.start();
+logger.info('Phase 4 cleanup jobs started (ChromaDB, MongoDB)');
+
+// Phase 4: Task queue worker is automatically started when imported
+logger.info('Phase 4 task queue worker started');
+
+logger.info('Background jobs scheduled successfully');
 logger.info('GNANI Backend application started.');
+
 

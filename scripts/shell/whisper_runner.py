@@ -1,151 +1,131 @@
-# whisper_runner.py
 import sys
-import os
-import argparse
-import json
+import struct
+import torch
 import numpy as np
+import whisper
+import argparse
 import io
-import atexit # Import atexit
+import os
 
-def exit_handler():
-    print(f"Whisper runner exiting gracefully.", file=sys.stderr, flush=True)
+# Increase recursion depth just in case
+sys.setrecursionlimit(2000)
 
-atexit.register(exit_handler)
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model', type=str, default='base', help='Model to use')
+    parser.add_argument('--language', type=str, default='en', help='Language')
+    parser.add_argument('--sample_rate', type=int, default=16000, help='Sample rate')
+    parser.add_argument('--compute_type', type=str, default='float16', help='Compute type')
+    args = parser.parse_args()
 
-try:
-    print("Whisper runner started. Python version:", sys.version, file=sys.stderr, flush=True)
-    import torch
-
-    import whisper
-except Exception as e:
-    print(f"ERROR:whisper_runner.py failed during initial setup/imports: {e}", file=sys.stderr, flush=True)
-    sys.exit(1)
-
-# Configuration from command line arguments
-parser = argparse.ArgumentParser(description="Whisper ASR Runner for Node.js via stdin/stdout")
-parser.add_argument("--model", type=str, required=True, help="Path to the Whisper model or model name (e.g., medium)")
-parser.add_argument("--language", type=str, default="en", help="Language for transcription")
-parser.add_argument("--sample_rate", type=int, default=16000, help="Expected audio sample rate")
-parser.add_argument("--compute_type", type=str, default="float16", help="Compute type for transcription (e.g., float16, int8)")
-
-args = parser.parse_args()
-
-# Load Whisper model
-try:
-    # Check if a path or a model name
-    if os.path.exists(args.model):
-        model = whisper.load_model(args.model)
-        print("Whisper model loaded successfully.", file=sys.stderr, flush=True)
-    else:
-        model = whisper.load_model(args.model)
-        print("Whisper model loaded successfully.", file=sys.stderr, flush=True)
-except Exception as e:
-    print(f"ERROR: Failed to load Whisper model: {e}", file=sys.stderr, flush=True)
-    sys.exit(1)
-
-# In-memory buffer for audio data for each session
-session_audio_buffers = {}
-def process_audio_chunk(session_id, audio_chunk_bytes, is_last_chunk):
-    # Ensure audio is 16kHz mono, if not already
-    # Whisper's transcribe function expects a NumPy array of floats.
-    # The audio chunk bytes are raw PCM, convert them.
+    # --- GPU/CPU Fallback Logic ---
+    # Check if CUDA is available
+    use_gpu = torch.cuda.is_available()
+    device = "cuda" if use_gpu else "cpu"
     
-    # Ensure the buffer size is a multiple of the element size (2 bytes for int16)
-    if len(audio_chunk_bytes) % 2 != 0:
-        audio_chunk_bytes = audio_chunk_bytes[:-1]
-
-    # Convert bytes to numpy array (assuming 16-bit PCM, little-endian)
-    audio_np = np.frombuffer(audio_chunk_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-
-    if session_id not in session_audio_buffers:
-        session_audio_buffers[session_id] = []
-    
-    session_audio_buffers[session_id].append(audio_np)
-
-    if is_last_chunk:
-        full_audio_np = np.concatenate(session_audio_buffers[session_id])
-        # Clear buffer after final processing
-        del session_audio_buffers[session_id]
+    # Adjust compute type based on device
+    # float16 is often not supported or slower on CPU
+    compute_type = args.compute_type
+    if device == "cpu":
+        compute_type = "int8" 
         
-        try:
-            # Whisper's transcribe expects a specific format, ensure it's correct
-            # For direct numpy array input, ensure it's mono 16kHz float32
-            
-            # This is a placeholder for actual Whisper streaming/chunk processing
-            # For simplicity, we concatenate all audio and transcribe at the end
-            # Real-time processing would involve more complex buffering and
-            # ASR logic (e.g., VAD + continuous transcription)
-            result = model.transcribe(full_audio_np, language=args.language, fp16=False if args.compute_type == "float32" else True)
-            transcription = result["text"].strip()
-            print(f"{session_id}:{transcription}:true", flush=True) # isFinal = true
-            sys.stdout.flush()
-        except Exception as e:
-            import traceback # Import traceback module
-            print(f"ERROR:{session_id}:Transcription failed: {e}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr) # Print full traceback
-            print(f"{session_id}::true", flush=True) # Send empty transcription if error
-            sys.stdout.flush()
-    else:
-        # For partial transcription, you'd typically process smaller chunks and
-        # aggregate results. For this simplified example, we only send final.
-        # However, to meet the "partial transcript" requirement, we can
-        # send a placeholder or a very basic partial result if desired.
-        # For now, let's just acknowledge receipt.
-        # In a more advanced setup, one might transcribe segments and send them.
-        print(f"{session_id}:ACK:false", flush=True) # isFinal = false, placeholder for partial
-        sys.stdout.flush()
+    print(f"ERROR:Initializing Whisper with device={device}, compute_type={compute_type}, model={args.model}", file=sys.stderr)
+    sys.stderr.flush()
 
-
-
-# Main loop to read from stdin
-while True:
     try:
-        # Read the 4-byte header length
-        header_len_bytes = sys.stdin.buffer.read(4)
-        if not header_len_bytes:
-            break # EOF
-        header_length = int.from_bytes(header_len_bytes, 'big')
-
-        # Read the header line
-        header_line_bytes = sys.stdin.buffer.read(header_length)
-        header_line = header_line_bytes.decode('utf-8')
-                
-        parts = header_line.split(':', 2) # Split by first two colons
-        if len(parts) != 3:
-            print(f"ERROR:Invalid header format: {header_line}", file=sys.stderr, flush=True)
-            continue
-        
-        session_id, chunk_type, _ = parts
-        is_last_chunk = (chunk_type == 'LAST')
-        
-        # Read the 4-byte audio data length
-        audio_len_bytes = sys.stdin.buffer.read(4)
-        if not audio_len_bytes:
-            print(f"ERROR:{session_id}:Empty audio data length received (EOF).", file=sys.stderr, flush=True)
-            break # EOF
-        audio_length = int.from_bytes(audio_len_bytes, 'big')
-
-        # Read the raw audio data
-        audio_chunk_bytes = sys.stdin.buffer.read(audio_length)
-        
-        if audio_length > 0 and not audio_chunk_bytes:
-            print(f"ERROR:{session_id}:Empty audio data received.", file=sys.stderr, flush=True)
-            continue
-        
-        # Allow empty audio chunk if it's the LAST chunk (signal to finalize)
-        if audio_length == 0 and not is_last_chunk:
-             print(f"ERROR:{session_id}:Empty audio data length with no LAST flag.", file=sys.stderr, flush=True)
-             continue
-        
-        # Debug logging
-        print(f"DEBUG: Received header: {header_line.strip()}, Audio Len: {audio_length}", file=sys.stderr, flush=True)
-
-        process_audio_chunk(session_id, audio_chunk_bytes, is_last_chunk)
-
+        # Load model
+        # 'turbo' is a valid model name in newer whisper versions, or maps to large-v3-turbo
+        # If loading fails, we might need to fallback to 'medium' or 'base'
+        model = whisper.load_model(args.model, device=device)
     except Exception as e:
-        print(f"ERROR:General error in runner: {e}", file=sys.stderr, flush=True)
-        import traceback
-        traceback.print_exc(file=sys.stderr)
-        sys.stdout.flush()
+        print(f"ERROR:Failed to load model '{args.model}': {e}", file=sys.stderr)
+        sys.exit(1)
 
-print("Whisper runner exiting.", file=sys.stderr)
+    print("ERROR:Whisper model loaded successfully", file=sys.stderr)
+    sys.stderr.flush()
+
+    # Buffer to hold audio for sessions
+    # Map<sessionId, numpy_array>
+    session_buffers = {}
+
+    # Use standard input buffer for binary reading
+    stdin = sys.stdin.buffer
+
+    while True:
+        try:
+            # 1. Read Header Length (4 bytes)
+            header_len_bytes = stdin.read(4)
+            if not header_len_bytes:
+                break # EOF
+            
+            header_len = struct.unpack('>I', header_len_bytes)[0]
+
+            # 2. Read Header
+            header_bytes = stdin.read(header_len)
+            header_str = header_bytes.decode('utf-8')
+            
+            # Header format: sessionId:CHUNK_TYPE:_
+            parts = header_str.split(':')
+            if len(parts) < 2:
+                print(f"ERROR:Invalid header: {header_str}", file=sys.stderr)
+                continue
+                
+            session_id = parts[0]
+            chunk_type = parts[1] # CHUNK or LAST
+
+            # 3. Read Audio Length (4 bytes)
+            audio_len_bytes = stdin.read(4)
+            audio_len = struct.unpack('>I', audio_len_bytes)[0]
+
+            # 4. Read Audio Data
+            audio_bytes = stdin.read(audio_len)
+            
+            # Convert audio bytes to numpy array (float32)
+            # Assuming 16-bit PCM input (2 bytes per sample) from Node.js
+            # We use int16 then normalize to float32 between -1.0 and 1.0
+            audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+
+            # Append to session buffer
+            if session_id not in session_buffers:
+                session_buffers[session_id] = np.array([], dtype=np.float32)
+            
+            session_buffers[session_id] = np.concatenate((session_buffers[session_id], audio_np))
+
+            # Logic:
+            # We only transcribe when we have a "significant" amount of audio or it's the LAST chunk.
+            # This prevents running the heavy model on every tiny 60ms chunk.
+            
+            is_final = (chunk_type == 'LAST')
+            buffer_len = len(session_buffers[session_id])
+            
+            # 16000 samples = 1 second. Transcribe every ~1 second of new audio or at end.
+            # (In a real streaming setup, we might use a rolling window, but this is a simple batch-like approach)
+            if buffer_len > 16000 or is_final:
+                
+                # Run transcription
+                # fp16=False if CPU to avoid warnings/errors
+                result = model.transcribe(
+                    session_buffers[session_id], 
+                    language=args.language,
+                    fp16=(device == "cuda") 
+                )
+                
+                text = result['text'].strip()
+                
+                # Output format expected by WhisperService.ts: 
+                # sessionId:transcript:isFinal
+                # Note: We print to stdout
+                print(f"{session_id}:{text}:{str(is_final).lower()}")
+                sys.stdout.flush()
+
+            if is_final:
+                # Clear buffer after final transcription
+                if session_id in session_buffers:
+                    del session_buffers[session_id]
+
+        except Exception as e:
+            print(f"ERROR:Processing loop error: {e}", file=sys.stderr)
+            sys.stderr.flush()
+
+if __name__ == "__main__":
+    main()

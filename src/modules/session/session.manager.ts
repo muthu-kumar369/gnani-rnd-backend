@@ -8,7 +8,7 @@ import audioProcessor from '../../utils/audio.processor.js';
 import queryProcessor from '../query/query.processor.js';
 import contextEngine from '../context/context.engine.js';
 import actionDispatcher from '../action/action-dispatcher.service.js';
-import llmService from '../llm/llm.service.js';
+import { llmManager } from '../../core/llm/llm.manager.js'; // Phase 4: Use LLMManager
 import llmResponseParser from '../llm/llm-response.parser.js';
 import audioStreamer from '../../utils/audio.streamer.js';
 import toolRegistry from '../tools/tool.registry.js';
@@ -310,13 +310,21 @@ class SessionManager {
             this.logger.debug(`Re-Act Turn ${turnCount}/${MAX_TURNS}`);
 
             try {
-                const llmRawResponse = await llmService.getLlmResponse(currentPrompt, async (partialResponse: any) => {
-                    if (session.onLlmChunkCallback) {
-                        await session.onLlmChunkCallback(partialResponse);
-                    }
+                // Phase 4: Use LLMManager for generation
+                let fullResponse = '';
+                const stream = llmManager.generate(currentPrompt, {
+                    stream: true,
+                    temperature: 0.7
                 });
 
-                const trimmedResponse = llmRawResponse.text.trim();
+                for await (const chunk of stream) {
+                    fullResponse += chunk;
+                    if (session.onLlmChunkCallback) {
+                        await session.onLlmChunkCallback(chunk);
+                    }
+                }
+
+                const trimmedResponse = fullResponse.trim();
                 let toolCall = null;
 
                 // Enhanced Tool Call Detection with multiple extraction strategies
@@ -374,9 +382,19 @@ class SessionManager {
                     continue;
                 } else {
                     // Final Response (No tool needed)
-                    const parsed = llmResponseParser.parse(llmRawResponse);
-                    llmResponseText = parsed.textResponse;
-                    actionDirective = parsed.actionInstructions;
+                    // We need to construct a response object similar to what llmResponseParser expects
+                    // or just use the text directly since we already have it.
+                    // The parser was mainly for parsing the raw Ollama response object.
+                    // Since llmManager returns string, we can simplify.
+
+                    llmResponseText = fullResponse;
+
+                    // Attempt to parse action directives if any (legacy support)
+                    const parsed = llmResponseParser.parse({ text: fullResponse });
+                    if (parsed.actionInstructions) {
+                        actionDirective = parsed.actionInstructions;
+                    }
+
                     break; // Exit loop
                 }
 
