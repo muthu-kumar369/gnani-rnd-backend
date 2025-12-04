@@ -28,4 +28,17 @@ router.post('/:id/regenerate', conversationController.regenerateResponse);
 // Edit message
 router.post('/:id/edit', conversationController.editMessage);
 
+// Delete message
+router.delete('/:id/messages/:messageId', conversationController.deleteMessage);
+
+// Get prompt templates
+router.get('/prompt-templates', conversationController.getPromptTemplates);
+
+// Update system prompt
+router.patch('/:id/system-prompt', conversationController.updateSystemPrompt);
+
+// Export conversation
+router.get('/:sessionId/export/markdown', conversationController.exportMarkdown);
+router.get('/:sessionId/export/json', conversationController.exportJson);
+
 export default router;

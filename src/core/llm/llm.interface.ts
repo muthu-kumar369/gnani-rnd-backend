@@ -33,7 +33,7 @@ export interface LLMProvider {
     name: string;
 
     // Basic generation
-    generate(prompt: string, options?: GenerateOptions): AsyncIterableIterator<string>;
+    generate(prompt: string, options?: GenerateOptions): AsyncIterableIterator<LLMResponse>;
 
     // Generation with tools (function calling)
     generateWithTools(

@@ -23,7 +23,7 @@ export class LLMManager {
     }
 
     // Main generation method
-    async *generate(prompt: string, options?: GenerateOptions): AsyncIterableIterator<string> {
+    async *generate(prompt: string, options?: GenerateOptions): AsyncIterableIterator<LLMResponse> {
         const available = await this.currentProvider.isAvailable();
         if (!available) {
             throw new Error(`LLM provider ${this.currentProvider.name} is not available`);

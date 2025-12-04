@@ -18,6 +18,8 @@ import { CircuitBreaker } from '../../core/reliability/circuit-breaker.js';
 import { retryWithBackoff } from '../../utils/retry.js';
 import crypto from 'crypto';
 import redis from '../../config/redis.config.js';
+import { getModelConfig, DEFAULT_MODEL } from '../../config/llm.config.js';
+import tokenCounterService, { TokenUsage } from './token-counter.service.js';
 
 class LlmService {
     private logger: Logger;
@@ -48,7 +50,22 @@ class LlmService {
         return `llm:${crypto.createHash('sha256').update(normalized).digest('hex').substring(0, 16)}`;
     }
 
-    async getToolDecision(decisionPrompt: any): Promise<{ needs_tool: boolean, tool_name?: string, parameters?: any }> {
+    /**
+     * Get model path based on user preference with fallback to default
+     * @param preferredModel - User's preferred model ID
+     * @returns Model path to use for LLM requests
+     */
+    private getModelPath(preferredModel?: string): string {
+        if (!preferredModel) {
+            return LLM_MODEL_PATH; // Use env default
+        }
+
+        const modelConfig = getModelConfig(preferredModel);
+        this.logger.debug(`Using model: ${modelConfig.modelName} (requested: ${preferredModel})`);
+        return modelConfig.modelName;
+    }
+
+    async getToolDecision(decisionPrompt: any, preferredModel?: string): Promise<{ needs_tool: boolean, tool_name?: string, parameters?: any }> {
         const sessionId = decisionPrompt.session_id;
         this.logger.debug(`Getting tool decision for session ${sessionId}`);
 
@@ -64,7 +81,7 @@ class LlmService {
             const promptText = `System: ${decisionPrompt.system_message}\n\nUser: ${decisionPrompt.user_query}`;
 
             const requestBody = {
-                model: LLM_MODEL_PATH,
+                model: this.getModelPath(preferredModel),
                 prompt: promptText,
                 max_tokens: 200, // Short response expected
                 temperature: 0.1, // Low temp for deterministic JSON
@@ -108,7 +125,83 @@ class LlmService {
         }
     }
 
-    async getLlmResponse(structuredPrompt: any, onPartialResponse: ((response: { text: string }) => Promise<void> | void) | null = null): Promise<{ text: string, action: any }> {
+    /**
+     * Generate a concise conversation title based on conversation context
+     * @param conversationContext - String containing first 2-3 messages
+     * @returns Promise<string> - Generated title (max 60 characters)
+     */
+    async generateTitle(conversationContext: string): Promise<string> {
+        this.logger.debug('Generating conversation title', {
+            contextLength: conversationContext.length
+        });
+
+        try {
+            const headers: any = {
+                'Content-Type': 'application/json',
+            };
+            if (LLM_API_KEY && LLM_API_KEY !== 'your_llm_api_key_here') {
+                headers['Authorization'] = `Bearer ${LLM_API_KEY}`;
+            }
+
+            // Specialized prompt for title generation
+            const systemPrompt = `You are a title generator. Given a conversation excerpt, generate a concise, descriptive title (max 60 characters).
+The title should capture the main topic or question.
+Output only the title, nothing else. Do not use quotes.`;
+
+            const userPrompt = `Conversation:
+${conversationContext}
+
+Generate a title:`;
+
+            const promptText = `${systemPrompt}\n\n${userPrompt}`;
+
+            const requestBody = {
+                model: this.getModelPath(), // Use default for title generation
+                prompt: promptText,
+                max_tokens: 20, // Short response for title
+                temperature: 0.3, // Low temperature for consistency
+                stream: false,
+                stop: ["\n", "User:", "Assistant:"]
+            };
+
+            const response = await retryWithBackoff(
+                () => axios.post(this.llmApiUrl + '/api/generate', requestBody, { headers }),
+                2, // Only 2 retries for title generation
+                500,
+                'Title Generation'
+            );
+
+            let title = response.data.response.trim();
+
+            // Clean up the title
+            // Remove surrounding quotes if present
+            title = title.replace(/^["']|["']$/g, '');
+
+            // Truncate to 60 characters if needed
+            if (title.length > 60) {
+                title = title.substring(0, 57) + '...';
+            }
+
+            // Fallback if title is empty or too short
+            if (!title || title.length < 3) {
+                this.logger.warn('Generated title too short, using fallback');
+                return 'New Conversation';
+            }
+
+            this.logger.info('Successfully generated title', { title });
+            metrics.incLlmCall('title-generation', 'title_generation', 'success');
+
+            return title;
+
+        } catch (error: any) {
+            this.logger.error(`Error generating title: ${error.message}`);
+            metrics.incLlmCall('title-generation', 'title_generation', 'failure');
+            // Return fallback title on error
+            return 'New Conversation';
+        }
+    }
+
+    async getLlmResponse(structuredPrompt: any, onPartialResponse: ((response: { text: string }) => Promise<void> | void) | null = null, preferredModel?: string): Promise<{ text: string, action: any, tokenUsage?: TokenUsage }> {
         const sessionId = structuredPrompt.session_id;
         const userId = structuredPrompt.user_id;
         this.logger.debug(`Sending prompt to LLM for session ${sessionId}: ${JSON.stringify(structuredPrompt)}`);
@@ -147,7 +240,7 @@ class LlmService {
             this.logger.debug(`Crafted prompt for LLM: ${JSON.stringify(formattedPrompt)}`);
 
             let requestBody: any = {
-                model: LLM_MODEL_PATH,
+                model: this.getModelPath(preferredModel),
                 max_tokens: LLM_MAX_TOKENS,
                 temperature: 0.7,
                 top_p: 0.9,
@@ -186,6 +279,7 @@ class LlmService {
             return await this.circuitBreaker.execute(async () => {
                 let llmOutput = '';
                 let action = null;
+                let tokenUsage: TokenUsage | undefined;
 
                 // Start LLM latency tracking
                 latencyMonitor.startTimer(sessionId, 'llm_total');
@@ -208,6 +302,16 @@ class LlmService {
                         response.data.on('data', async (chunk: any) => {
                             try {
                                 const chunkData = JSON.parse(chunk.toString());
+
+                                // Capture token usage from final chunk
+                                if (chunkData.done && chunkData.prompt_eval_count && chunkData.eval_count) {
+                                    tokenUsage = tokenCounterService.createUsage(
+                                        chunkData.prompt_eval_count,
+                                        chunkData.eval_count,
+                                        requestBody.model
+                                    );
+                                }
+
                                 if (chunkData.response) {
                                     const newContent = chunkData.response;
 
@@ -339,6 +443,14 @@ class LlmService {
                     );
                     llmOutput = response.data.response;
 
+                    if (response.data.prompt_eval_count && response.data.eval_count) {
+                        tokenUsage = tokenCounterService.createUsage(
+                            response.data.prompt_eval_count,
+                            response.data.eval_count,
+                            requestBody.model
+                        );
+                    }
+
                     if (structuredPrompt.classified_intent === 'system_command' || structuredPrompt.classified_intent === 'utility_request') {
                         action = { action: 'OPEN_APP', app_name: 'Terminal' };
                     }
@@ -353,7 +465,7 @@ class LlmService {
                     this.logger.warn(`Cache write error: ${cacheError.message}`);
                 }
 
-                return { text: llmOutput, action };
+                return { text: llmOutput, action, tokenUsage };
             });
 
         } catch (error: any) {

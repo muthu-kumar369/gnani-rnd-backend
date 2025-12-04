@@ -10,6 +10,8 @@ import sessionMemory from '../memory/services/session-memory.service.js';
 import metrics from '../../core/monitoring/metrics.js';
 import auditService from '../../core/logger/audit.service.js';
 import { Logger } from 'winston';
+import Conversation from '../conversation/conversation.model.js';
+import ConversationMessage from '../memory/entities/conversation.entity.js';
 
 export interface Session {
     userId: string;
@@ -192,18 +194,63 @@ export class SessionCoordinator {
         try {
             this.logger.info(`[AUDIO-FLOW-12] Processing final transcript for session ${sessionId}: "${transcript.substring(0, 50)}..."`);
 
-            // Step 1: Build context (memory + RAG)
+            // Step 1: Fetch conversation to get custom system prompt
+            const conversation = await Conversation.findOne({ sessionId }).lean();
+            const customSystemPrompt = conversation?.systemPrompt;
+
+            // Save User Message to MongoDB
+            try {
+                await ConversationMessage.create({
+                    userId: session.userId,
+                    sessionId: sessionId,
+                    role: 'user',
+                    content: transcript,
+                    timestamp: new Date()
+                });
+            } catch (dbError: any) {
+                this.logger.error(`Failed to save user message: ${dbError.message}`);
+            }
+
+            // Step 2: Build context (memory + RAG)
             this.logger.info(`[AUDIO-FLOW-13] Building context for session ${sessionId}...`);
             const contextStartTime = Date.now();
-            const context = await this.contextBuilder.build(sessionId, session.userId, transcript);
+            const context = await this.contextBuilder.build(
+                sessionId,
+                session.userId,
+                transcript,
+                undefined, // attachments
+                customSystemPrompt
+            );
             const contextDuration = Date.now() - contextStartTime;
             this.logger.info(`[AUDIO-FLOW-14] Context built for session ${sessionId}`, {
                 duration: contextDuration,
-                hasContext: !!context
+                hasContext: !!context,
+                customPrompt: !!customSystemPrompt
             });
+
+            // Emit typing status: thinking
+            if (session.metadata?.grpcCall) {
+                session.metadata.grpcCall.write({
+                    typing_status: {
+                        status: 'thinking',
+                        message: 'Building context...'
+                    }
+                });
+            }
 
             // Step 2: Generate LLM response with Re-Act loop
             this.logger.info(`[AUDIO-FLOW-15] Calling LLMExecutor.generate for session ${sessionId}...`);
+
+            // Emit typing status: generating
+            if (session.metadata?.grpcCall) {
+                session.metadata.grpcCall.write({
+                    typing_status: {
+                        status: 'generating',
+                        message: undefined
+                    }
+                });
+            }
+
             const llmStartTime = Date.now();
             const response = await this.llmExecutor.generate(
                 context,
@@ -215,6 +262,26 @@ export class SessionCoordinator {
                 responseLength: response?.text?.length || 0,
                 hasToolCalls: !!(response?.toolCalls?.length)
             });
+
+            // Save Assistant Message to MongoDB
+            try {
+                await ConversationMessage.create({
+                    userId: session.userId,
+                    sessionId: sessionId,
+                    role: 'assistant',
+                    content: response.text,
+                    timestamp: new Date(),
+                    tokenUsage: response.tokenUsage ? {
+                        inputTokens: response.tokenUsage.promptTokens,
+                        outputTokens: response.tokenUsage.completionTokens,
+                        totalTokens: response.tokenUsage.totalTokens,
+                        estimatedCost: 0, // TODO: Calculate cost if needed
+                        model: 'ollama' // Default or fetch from config
+                    } : undefined
+                });
+            } catch (dbError: any) {
+                this.logger.error(`Failed to save assistant message: ${dbError.message}`);
+            }
 
             // Step 3: Execute tools if needed
             if (response.toolCalls && response.toolCalls.length > 0) {
@@ -231,6 +298,17 @@ export class SessionCoordinator {
                 totalDuration: Date.now() - contextStartTime,
                 responsePreview: response.text?.substring(0, 100)
             });
+
+            // Clear typing status
+            if (session.metadata?.grpcCall) {
+                session.metadata.grpcCall.write({
+                    typing_status: {
+                        status: 'idle',
+                        message: undefined
+                    }
+                });
+            }
+
             return { llmResponse: response.text };
 
         } catch (error: any) {

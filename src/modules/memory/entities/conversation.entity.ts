@@ -13,6 +13,20 @@ export interface IConversationMessage extends Document {
         processingTime?: number;
         [key: string]: any;
     };
+    attachments?: Array<{
+        fileId: string;
+        fileName: string;
+        fileSize: number;
+        mimeType: string;
+        parsedContent: string;
+    }>;
+    tokenUsage?: {
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+        estimatedCost: number;
+        model: string;
+    };
     parentId?: string;
     children?: string[];
     branchIndex?: number;
@@ -43,6 +57,23 @@ const conversationMessageSchema = new Schema({
     metadata: {
         type: Schema.Types.Mixed,
         default: {}
+    },
+    attachments: {
+        type: [{
+            fileId: { type: String, required: true },
+            fileName: { type: String, required: true },
+            fileSize: { type: Number, required: true },
+            mimeType: { type: String, required: true },
+            parsedContent: { type: String, default: '' }
+        }],
+        default: []
+    },
+    tokenUsage: {
+        inputTokens: { type: Number },
+        outputTokens: { type: Number },
+        totalTokens: { type: Number },
+        estimatedCost: { type: Number },
+        model: { type: String }
     },
     parentId: {
         type: String,

@@ -34,6 +34,8 @@ message SendAudioStreamResponse {
     string final_text = 3;
     string error_message = 4;
     ToolStatus tool_status = 5;
+    TitleUpdate title_update = 6;
+    TypingStatus typing_status = 7;
   }
 }
 
@@ -43,6 +45,16 @@ message ToolStatus {
   int32 progress = 3; // 0-100
   string message = 4; // Human-readable status
   int64 elapsed_ms = 5; // Time elapsed
+}
+
+message TitleUpdate {
+  string session_id = 1;
+  string title = 2;
+}
+
+message TypingStatus {
+  string status = 1; // 'thinking', 'generating', 'idle'
+  string message = 2; // Optional custom message
 }
 
 message EndSessionRequest {

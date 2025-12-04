@@ -13,6 +13,11 @@ import FEATURE_FLAGS from '../../config/feature-flags.js';
 interface LLMResponse {
     text: string;
     toolCalls?: any[];
+    tokenUsage?: {
+        promptTokens: number;
+        completionTokens: number;
+        totalTokens: number;
+    };
 }
 
 export class LLMExecutor {
@@ -47,12 +52,12 @@ export class LLMExecutor {
                 const cached = await llmCache.get(context.transcript, context);
                 if (cached) {
                     this.logger.info('Using cached LLM response');
-                    
+
                     // Stream cached response if callback provided
                     if (onChunk) {
                         await onChunk(cached);
                     }
-                    
+
                     return { text: cached };
                 }
             }
@@ -85,21 +90,21 @@ export class LLMExecutor {
 
                 // Generate LLM response
                 fullResponse = '';
-                
+
                 // Serialize prompt if it's an object (from contextEngine)
                 let promptString = '';
                 if (typeof currentPrompt === 'object') {
                     const p = currentPrompt as any;
                     // Construct a single string prompt from the components
                     promptString = `${p.system_message}\n\n`;
-                    
+
                     // Add conversation history
                     if (Array.isArray(p.conversation_history)) {
                         for (const msg of p.conversation_history) {
                             promptString += `${msg.query}\n${msg.response}\n\n`;
                         }
                     }
-                    
+
                     // Add current query
                     promptString += `User: ${p.current_user_query}\nAssistant:`;
                 } else {
@@ -111,12 +116,24 @@ export class LLMExecutor {
                     temperature: 0.7
                 });
 
+                let finalUsage;
+
                 for await (const chunk of stream) {
-                    fullResponse += chunk;
-                    tokenCount += chunk.length; // Approximate token count
-                    if (onChunk) {
-                        await onChunk(chunk);
+                    fullResponse += chunk.text;
+                    if (chunk.usage) {
+                        finalUsage = chunk.usage;
                     }
+
+                    if (chunk.text && onChunk) {
+                        await onChunk(chunk.text);
+                    }
+                }
+
+                // If usage not provided by provider, estimate it
+                if (!finalUsage) {
+                    tokenCount += fullResponse.length / 4; // Rough est
+                } else {
+                    tokenCount = finalUsage.totalTokens;
                 }
 
                 // Check for tool calls
@@ -160,7 +177,14 @@ export class LLMExecutor {
                 await llmCache.set(context.transcript, fullResponse, context);
             }
 
-            return { text: fullResponse };
+            return {
+                text: fullResponse,
+                tokenUsage: {
+                    promptTokens: 0, // We don't have prompt tokens easily available here unless provider sends it
+                    completionTokens: tokenCount,
+                    totalTokens: tokenCount
+                }
+            };
 
         } catch (error) {
             this.logger.error('LLM generation failed', { error });

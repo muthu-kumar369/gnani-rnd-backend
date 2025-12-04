@@ -35,6 +35,25 @@ class ShortTermMemoryService {
 
             await message.save();
             this.logger.debug(`Stored ${role} message for session ${sessionId}`);
+
+            // Trigger title generation after 3rd message (fire-and-forget)
+            // Count messages asynchronously to avoid blocking
+            ConversationMessage.countDocuments({ sessionId })
+                .then(async (count) => {
+                    if (count === 3) {
+                        this.logger.info(`Triggering title generation for session ${sessionId} (3 messages)`);
+                        // Import conversation service dynamically to avoid circular dependency
+                        const conversationService = (await import('../../conversation/conversation.service.js')).default;
+                        conversationService.generateConversationTitle(sessionId, userId)
+                            .catch((err: any) => {
+                                this.logger.error(`Failed to generate title for session ${sessionId}: ${err.message}`);
+                            });
+                    }
+                })
+                .catch((err: any) => {
+                    this.logger.warn(`Failed to count messages for title generation: ${err.message}`);
+                });
+
             return message;
         } catch (error: any) {
             this.logger.error(`Error storing message: ${error.message}`);

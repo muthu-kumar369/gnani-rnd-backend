@@ -10,6 +10,7 @@ export interface ISettings extends Document {
     volume: number;
     theme: string;
     shortcuts: Map<string, string>;
+    preferredModel: string;
 }
 
 export interface IDevice extends Document {
@@ -92,6 +93,7 @@ const settingsSchema: Schema = new Schema({
     shortcuts: { type: Map, of: String }, // Map for custom command shortcuts
     avatarEnabled: { type: Boolean, default: true },
     avatarGender: { type: String, default: 'female' },
+    preferredModel: { type: String, default: 'llama3' },
 }, { _id: false });
 
 const deviceSchema: Schema = new Schema({
@@ -189,7 +191,7 @@ const userSchema = new Schema({
 }, { timestamps: true }); // Mongoose handles createdAt and updatedAt automatically
 
 // Ensure `updatedAt` is updated on save
-userSchema.pre<IUser>('save', function(next) {
+userSchema.pre<IUser>('save', function (next) {
     this.updatedAt = new Date();
     next();
 });

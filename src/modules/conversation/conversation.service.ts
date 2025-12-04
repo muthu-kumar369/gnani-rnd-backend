@@ -1,6 +1,8 @@
 import Conversation, { IConversation } from './conversation.model.js';
 import ConversationMessage from '../memory/entities/conversation.entity.js';
 import llmService from '../llm/llm.service.js';
+import shortTermMemory from '../memory/services/short-term-memory.service.js';
+import { createContextualLogger } from '../../core/logger/logger.js';
 import { Types } from 'mongoose';
 
 interface PaginationOptions {
@@ -11,6 +13,7 @@ interface PaginationOptions {
 }
 
 class ConversationService {
+    private logger = createContextualLogger({ module: 'ConversationService' });
     /**
      * List conversations for a user
      */
@@ -18,7 +21,7 @@ class ConversationService {
         const page = Math.max(1, options.page || 1);
         const limit = Math.max(1, Math.min(50, options.limit || 20));
         const skip = (page - 1) * limit;
-        
+
         const sort: any = {};
         const sortBy = options.sortBy || 'updatedAt';
         const sortOrder = options.sortOrder === 'asc' ? 1 : -1;
@@ -41,7 +44,7 @@ class ConversationService {
                 .sort({ timestamp: -1 })
                 .select('content timestamp')
                 .lean();
-            
+
             return {
                 ...conv,
                 id: conv._id,
@@ -64,7 +67,7 @@ class ConversationService {
      */
     async getConversation(sessionId: string, userId: string) {
         const conversation = await Conversation.findOne({ sessionId, userId, isDeleted: false }).lean();
-        
+
         if (!conversation) {
             return null;
         }
@@ -134,14 +137,47 @@ class ConversationService {
     }
 
     /**
-     * Soft delete conversation
+     * Soft delete conversation and cleanup associated files
      */
     async deleteConversation(sessionId: string, userId: string) {
-        return Conversation.findOneAndUpdate(
-            { sessionId, userId },
-            { isDeleted: true },
-            { new: true }
-        );
+        try {
+            // Get all messages with attachments
+            const messages = await ConversationMessage.find({ sessionId, userId });
+
+            // Collect all file IDs from attachments
+            const fileIds: string[] = [];
+            messages.forEach(msg => {
+                if (msg.attachments && msg.attachments.length > 0) {
+                    msg.attachments.forEach((att: any) => {
+                        if (att.fileId) {
+                            fileIds.push(att.fileId);
+                        }
+                    });
+                }
+            });
+
+            // Delete all associated files
+            if (fileIds.length > 0) {
+                const fileService = (await import('../file/file.service.js')).default;
+                await Promise.all(
+                    fileIds.map(fileId =>
+                        fileService.deleteFile(fileId, userId).catch(err => {
+                            console.error(`Failed to delete file ${fileId}:`, err);
+                        })
+                    )
+                );
+            }
+
+            // Soft delete conversation
+            return Conversation.findOneAndUpdate(
+                { sessionId, userId },
+                { isDeleted: true },
+                { new: true }
+            );
+        } catch (error: any) {
+            console.error('Error deleting conversation:', error);
+            throw error;
+        }
     }
 
     /**
@@ -153,6 +189,82 @@ class ConversationService {
             { title },
             { new: true }
         );
+    }
+
+    /**
+     * Update conversation system prompt
+     */
+    async updateSystemPrompt(sessionId: string, userId: string, systemPrompt: string) {
+        return Conversation.findOneAndUpdate(
+            { sessionId, userId, isDeleted: false },
+            { systemPrompt },
+            { new: true }
+        );
+    }
+
+    /**
+     * Generate conversation title based on first 2-3 messages
+     * @param sessionId - Session ID of the conversation
+     * @param userId - User ID
+     * @returns Promise<string> - Generated title
+     */
+    async generateConversationTitle(sessionId: string, userId: string): Promise<string> {
+        try {
+            this.logger.info(`Generating title for conversation ${sessionId}`);
+
+            // Fetch first 3 messages from the conversation
+            const messages = await shortTermMemory.getSessionMessages(sessionId);
+
+            if (messages.length < 2) {
+                this.logger.warn(`Not enough messages to generate title for session ${sessionId}`);
+                return 'New Conversation';
+            }
+
+            // Take first 3 messages (or all if less than 3)
+            const firstMessages = messages.slice(0, 3);
+
+            // Build context string from messages
+            const contextParts: string[] = [];
+            firstMessages.forEach(msg => {
+                const role = msg.role === 'user' ? 'User' : 'Assistant';
+                const content = msg.content.substring(0, 200); // Limit each message to 200 chars
+                contextParts.push(`${role}: ${content}`);
+            });
+
+            const conversationContext = contextParts.join('\n');
+
+            // Call LLM service to generate title
+            const generatedTitle = await llmService.generateTitle(conversationContext);
+
+            // Update conversation with new title
+            await this.updateTitle(sessionId, userId, generatedTitle);
+
+            // Emit gRPC event for title update
+            try {
+                const sessionCoordinator = (await import('../session/session.coordinator.js')).default;
+                const session = sessionCoordinator.getSession(sessionId);
+                if (session && session.metadata?.grpcCall) {
+                    session.metadata.grpcCall.write({
+                        title_update: {
+                            session_id: sessionId,
+                            title: generatedTitle
+                        }
+                    });
+                    this.logger.debug(`Emitted title update via gRPC for session ${sessionId}`);
+                }
+            } catch (emitError: any) {
+                this.logger.warn(`Failed to emit title update via gRPC: ${emitError.message}`);
+            }
+
+            this.logger.info(`Successfully generated and updated title for session ${sessionId}: "${generatedTitle}"`);
+
+            return generatedTitle;
+
+        } catch (error: any) {
+            this.logger.error(`Error generating conversation title for session ${sessionId}: ${error.message}`);
+            // Don't throw - just return fallback
+            return 'New Conversation';
+        }
     }
 
     /**
@@ -189,7 +301,7 @@ class ConversationService {
         // We need to reconstruct the prompt context. For simplicity, we'll just use the parent message for now,
         // but ideally we should rebuild the history up to that point.
         // TODO: Rebuild full history context for regeneration
-        
+
         const prompt = {
             session_id: sessionId,
             user_id: userId,
@@ -283,6 +395,42 @@ class ConversationService {
         await newUserMessage.save();
 
         return { newUserMessage, newAssistantMessage };
+    }
+    /**
+     * Delete a message and all its descendants
+     */
+    async deleteMessage(sessionId: string, messageId: string, userId: string) {
+        const message = await ConversationMessage.findOne({ _id: messageId, sessionId, userId });
+        if (!message) {
+            throw new Error('Message not found');
+        }
+
+        // 1. Find all descendants
+        const descendants: string[] = [];
+        const queue: string[] = [messageId];
+
+        while (queue.length > 0) {
+            const currentId = queue.shift()!;
+            descendants.push(currentId);
+
+            const currentMsg = await ConversationMessage.findById(currentId);
+            if (currentMsg && currentMsg.children && currentMsg.children.length > 0) {
+                queue.push(...currentMsg.children);
+            }
+        }
+
+        // 2. Delete all descendants (including the message itself)
+        await ConversationMessage.deleteMany({ _id: { $in: descendants } });
+
+        // 3. Update parent's children array
+        if (message.parentId) {
+            await ConversationMessage.updateOne(
+                { _id: message.parentId },
+                { $pull: { children: messageId } }
+            );
+        }
+
+        return { deletedCount: descendants.length, deletedIds: descendants };
     }
 }
 

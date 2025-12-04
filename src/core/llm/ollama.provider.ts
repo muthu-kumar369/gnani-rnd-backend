@@ -21,11 +21,11 @@ export class OllamaProvider implements LLMProvider {
         logger.info('OllamaProvider initialized', { baseUrl: this.baseUrl, model: this.model });
     }
 
-    async *generate(prompt: string, options?: GenerateOptions): AsyncIterableIterator<string> {
+    async *generate(prompt: string, options?: GenerateOptions): AsyncIterableIterator<LLMResponse> {
         try {
             logger.info(`Ollama Request: URL=${this.baseUrl}/api/generate, Model=${this.model}`);
             logger.info(`Ollama Prompt Preview: ${prompt.substring(0, 100)}...`);
-            
+
             const response = await axios.post(
                 `${this.baseUrl}/api/generate`,
                 {
@@ -46,13 +46,28 @@ export class OllamaProvider implements LLMProvider {
 
             for await (const chunk of response.data) {
                 const data = JSON.parse(chunk.toString());
-                if (data.response) {
-                    yield data.response;
+
+                const responseObj: LLMResponse = {
+                    text: data.response || '',
+                    finishReason: data.done ? 'stop' : 'length' // Simplified
+                };
+
+                if (data.done && data.prompt_eval_count && data.eval_count) {
+                    responseObj.usage = {
+                        promptTokens: data.prompt_eval_count,
+                        completionTokens: data.eval_count,
+                        totalTokens: data.prompt_eval_count + data.eval_count
+                    };
                 }
+
+                if (data.response || data.done) {
+                    yield responseObj;
+                }
+
                 if (data.done) break;
             }
         } catch (error: any) {
-            logger.error('Ollama generation failed', { 
+            logger.error('Ollama generation failed', {
                 error: error.message,
                 status: error.response?.status,
                 statusText: error.response?.statusText,
@@ -74,10 +89,11 @@ export class OllamaProvider implements LLMProvider {
 
         let fullText = '';
         for await (const chunk of this.generate(fullPrompt, options)) {
-            fullText += chunk;
+            fullText += chunk.text;
             yield {
-                text: chunk,
-                finishReason: 'stop'
+                text: chunk.text,
+                finishReason: 'stop',
+                usage: chunk.usage
             };
         }
 

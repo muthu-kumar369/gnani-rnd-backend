@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
 import conversationService from './conversation.service.js';
+import exportService from './export.service.js';
+import { PROMPT_TEMPLATES } from '../../data/prompt-templates.js';
 
 // Extend Request type to include user
 interface AuthenticatedRequest extends Request {
@@ -96,7 +98,7 @@ class ConversationController {
         } catch (error) {
             console.error('Error updating title:', error);
             res.status(500).json({ error: 'Internal Server Error' });
-    }
+        }
     }
 
     async regenerateResponse(req: AuthenticatedRequest, res: Response) {
@@ -132,6 +134,104 @@ class ConversationController {
         } catch (error: any) {
             console.error('Error editing message:', error);
             res.status(500).json({ error: error.message || 'Internal Server Error' });
+        }
+    }
+    async deleteMessage(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { id, messageId } = req.params;
+
+            if (!messageId) return res.status(400).json({ error: 'Message ID is required' });
+
+            const result = await conversationService.deleteMessage(id, messageId, userId);
+            res.json(result);
+        } catch (error: any) {
+            console.error('Error deleting message:', error);
+            res.status(500).json({ error: error.message || 'Internal Server Error' });
+        }
+    }
+
+    async getPromptTemplates(req: AuthenticatedRequest, res: Response) {
+        try {
+            res.json({ templates: PROMPT_TEMPLATES });
+        } catch (error) {
+            console.error('Error getting prompt templates:', error);
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
+    }
+
+    async updateSystemPrompt(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { id } = req.params;
+            const { systemPrompt } = req.body;
+
+            if (!systemPrompt || typeof systemPrompt !== 'string') {
+                return res.status(400).json({ error: 'systemPrompt is required and must be a string' });
+            }
+
+            if (systemPrompt.length > 2000) {
+                return res.status(400).json({ error: 'systemPrompt must be less than 2000 characters' });
+            }
+
+            const result = await conversationService.updateSystemPrompt(id, userId, systemPrompt);
+
+            if (!result) {
+                return res.status(404).json({ error: 'Conversation not found' });
+            }
+
+            res.json(result);
+        } catch (error) {
+            console.error('Error updating system prompt:', error);
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
+    }
+
+    async exportMarkdown(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { sessionId } = req.params;
+            const markdown = await exportService.exportToMarkdown(sessionId, userId);
+
+            // Set headers for file download
+            const filename = `conversation-${sessionId}-${Date.now()}.md`;
+            res.setHeader('Content-Type', 'text/markdown');
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            res.send(markdown);
+        } catch (error: any) {
+            console.error('Error exporting to markdown:', error);
+            if (error.message === 'Conversation not found') {
+                return res.status(404).json({ error: 'Conversation not found' });
+            }
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
+    }
+
+    async exportJson(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { sessionId } = req.params;
+            const data = await exportService.exportToJson(sessionId, userId);
+
+            // Set headers for file download
+            const filename = `conversation-${sessionId}-${Date.now()}.json`;
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            res.json(data);
+        } catch (error: any) {
+            console.error('Error exporting to JSON:', error);
+            if (error.message === 'Conversation not found') {
+                return res.status(404).json({ error: 'Conversation not found' });
+            }
+            res.status(500).json({ error: 'Internal Server Error' });
         }
     }
 }

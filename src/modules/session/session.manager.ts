@@ -117,20 +117,20 @@ class SessionManager {
                     newSize,
                     maxSize: this.MAX_BUFFER_SIZE
                 });
-                
+
                 // Auto-flush to prevent crash
                 await this.flushAudioBuffer(sessionId);
-                
+
                 // Emit warning to frontend via callback
                 if (session.onTranscriptionCallback) {
                     Promise.resolve(session.onTranscriptionCallback('⚠️ Audio buffer overflow - processing...', false)).catch(err => {
                         this.logger.error(`Error in overflow warning callback: ${err.message}`);
                     });
                 }
-                
+
                 metrics.incrementAudioBufferOverflow(sessionId);
             }
-            
+
             // Warning at 80% capacity
             if (newSize > this.BUFFER_WARNING_SIZE && currentSize <= this.BUFFER_WARNING_SIZE) {
                 this.logger.warn('Audio buffer approaching limit', {
@@ -187,16 +187,16 @@ class SessionManager {
     private async flushAudioBuffer(sessionId: string): Promise<void> {
         const session = this.sessions.get(sessionId);
         if (!session || session.audioBuffer.length === 0) return;
-        
-        this.logger.info('Flushing audio buffer', { 
+
+        this.logger.info('Flushing audio buffer', {
             sessionId,
             bufferSize: session.audioBuffer.reduce((sum, buf) => sum + buf.length, 0),
             chunks: session.audioBuffer.length
         });
-        
+
         // Process accumulated audio
         const combinedBuffer = Buffer.concat(session.audioBuffer);
-        
+
         // Send to Whisper for transcription
         whisperService.sendAudioChunk(sessionId, combinedBuffer, (transcript: string, isFinal: boolean) => {
             if (session.onTranscriptionCallback && transcript !== 'ACK') {
@@ -205,7 +205,7 @@ class SessionManager {
                 });
             }
         }, true);
-        
+
         // Clear buffer
         session.audioBuffer = [];
         // Clear buffer
@@ -219,7 +219,7 @@ class SessionManager {
     getBufferStats(sessionId: string): { size: number; chunks: number } {
         const session = this.sessions.get(sessionId);
         if (!session) return { size: 0, chunks: 0 };
-        
+
         const size = session.audioBuffer.reduce((sum, buf) => sum + buf.length, 0);
         return { size, chunks: session.audioBuffer.length };
     }
@@ -407,9 +407,9 @@ class SessionManager {
                 });
 
                 for await (const chunk of stream) {
-                    fullResponse += chunk;
+                    fullResponse += chunk.text;
                     if (session.onLlmChunkCallback) {
-                        await session.onLlmChunkCallback(chunk);
+                        await session.onLlmChunkCallback(chunk.text);
                     }
                 }
 

@@ -4,6 +4,7 @@ export interface IConversation extends Document {
     userId: string;
     sessionId: string;
     title: string;
+    systemPrompt: string;
     isDeleted: boolean;
     metadata: Record<string, any>;
     createdAt: Date;
@@ -26,6 +27,10 @@ const conversationSchema = new Schema({
         type: String,
         required: true,
         default: 'New Conversation'
+    },
+    systemPrompt: {
+        type: String,
+        default: 'You are Gnani, a helpful AI assistant.'
     },
     isDeleted: {
         type: Boolean,
