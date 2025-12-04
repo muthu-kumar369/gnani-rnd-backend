@@ -11,7 +11,7 @@ class Metrics {
     public llmCallCounter: client.Counter;
     public actionDispatchCounter: client.Counter;
     // Old cache counters removed
-    
+
     // Month-2: Enhanced metrics
     public errorsTotal: client.Counter;
     public sessionsTotal: client.Counter;
@@ -21,7 +21,7 @@ class Metrics {
     public toolExecutionDuration: client.Histogram;
     public audioBufferSize: client.Gauge;
     public memoryUsage: client.Gauge;
-    
+
     // Month-3: Cache metrics
     public cacheHitsTotal: client.Counter;
     public cacheMissesTotal: client.Counter;
@@ -255,6 +255,13 @@ class Metrics {
 
     async getMetrics(): Promise<string> {
         return this.registry.metrics();
+    }
+    incrementLLMCacheHit(): void {
+        this.cacheHitsTotal.inc({ cache_type: 'llm_response', tool: 'llm_service' });
+    }
+
+    incrementLLMCacheMiss(): void {
+        this.cacheMissesTotal.inc({ cache_type: 'llm_response', tool: 'llm_service' });
     }
 }
 

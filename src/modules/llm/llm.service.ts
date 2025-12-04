@@ -16,6 +16,8 @@ import { Logger } from 'winston';
 
 import { CircuitBreaker } from '../../core/reliability/circuit-breaker.js';
 import { retryWithBackoff } from '../../utils/retry.js';
+import crypto from 'crypto';
+import redis from '../../config/redis.config.js';
 
 class LlmService {
     private logger: Logger;
@@ -35,6 +37,15 @@ class LlmService {
 
         this.logger.info('LlmService initialized with Circuit Breaker.');
         auditService.logEvent('LLM_SERVICE_INIT', null, null, {}, 'success');
+    }
+
+    private generateCacheKey(prompt: any): string {
+        const normalized = JSON.stringify({
+            query: prompt.current_user_query,
+            intent: prompt.classified_intent,
+            system: prompt.system_message?.substring(0, 100) // First 100 chars
+        });
+        return `llm:${crypto.createHash('sha256').update(normalized).digest('hex').substring(0, 16)}`;
     }
 
     async getToolDecision(decisionPrompt: any): Promise<{ needs_tool: boolean, tool_name?: string, parameters?: any }> {
@@ -102,6 +113,27 @@ class LlmService {
         const userId = structuredPrompt.user_id;
         this.logger.debug(`Sending prompt to LLM for session ${sessionId}: ${JSON.stringify(structuredPrompt)}`);
         auditService.logLlmEvent(userId, sessionId, structuredPrompt, null, 'info', null);
+
+        // NEW: Check cache
+        const cacheKey = this.generateCacheKey(structuredPrompt);
+        try {
+            const cached = await redis.get(cacheKey);
+            if (cached) {
+                this.logger.info('LLM cache hit', { cacheKey });
+                metrics.incrementLLMCacheHit();
+                const response = JSON.parse(cached);
+
+                // Stream cached response if callback provided
+                if (onPartialResponse) {
+                    await onPartialResponse({ type: 'complete_response', text: response.text } as any);
+                }
+
+                return response;
+            }
+            metrics.incrementLLMCacheMiss();
+        } catch (cacheError: any) {
+            this.logger.warn(`Cache read error: ${cacheError.message}`);
+        }
 
         try {
             const headers: any = {
@@ -285,10 +317,10 @@ class LlmService {
                             }
 
                             console.log(`[LLM Service] Full Output: "${llmOutput}"`);
-                            
+
                             // End LLM total latency tracking
                             latencyMonitor.endTimer(sessionId, 'llm_total');
-                            
+
                             metrics.incLlmCall(sessionId, structuredPrompt.classified_intent, 'success');
                             auditService.logLlmEvent(userId, sessionId, structuredPrompt, { text: llmOutput }, 'success');
                             resolve();
@@ -312,6 +344,13 @@ class LlmService {
                     }
                     metrics.incLlmCall(sessionId, structuredPrompt.classified_intent, 'success');
                     auditService.logLlmEvent(userId, sessionId, structuredPrompt, { text: llmOutput, action }, 'success');
+                }
+
+                // NEW: Cache the response for 1 hour
+                try {
+                    await redis.setex(cacheKey, 3600, JSON.stringify({ text: llmOutput, action }));
+                } catch (cacheError: any) {
+                    this.logger.warn(`Cache write error: ${cacheError.message}`);
                 }
 
                 return { text: llmOutput, action };

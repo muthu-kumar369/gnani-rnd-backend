@@ -192,11 +192,11 @@ class MemoryManager {
         // CRITICAL FIX: Use getSessionMessages to scope context to the specific session
         // instead of getRecentMessages which mixes all user conversations
         const messages = await shortTermMemory.getSessionMessages(sessionId);
-        
+
         // If session has no messages (new session), we might want to pull recent context 
         // from other sessions ONLY if explicitly requested, but for now we stick to strict scoping
         // as per user requirement.
-        
+
         const formattedMessages = this.formatMessages(messages);
 
         // Apply summarization if needed
@@ -502,7 +502,7 @@ class MemoryManager {
     /**
      * Check if summarization is needed and trigger it
      */
-    private async checkAndTriggerSummarization(userId: string): Promise<void> {
+    public async checkAndTriggerSummarization(userId: string): Promise<void> {
         try {
             const stats = await shortTermMemory.getUserStats(userId);
 

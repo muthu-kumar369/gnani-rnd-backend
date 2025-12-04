@@ -4,16 +4,18 @@ import logger from '../../core/logger/logger.js';
 import axios from 'axios';
 import crypto from 'crypto';
 import redisClient from '../../config/redis.config.js';
+import { BatchProcessor } from '../../core/batching/batch-processor.js';
 
 class VectorManager {
     private client: ChromaClient | null = null;
     private collection: Collection | null = null;
-    
+    private batchProcessor: BatchProcessor<string, number[]>;
+
     // Configuration
     private VECTOR_DB_HOST: string = process.env.VECTOR_DB_HOST || 'localhost';
     private VECTOR_DB_PORT: string = process.env.VECTOR_DB_PORT || '8000';
     private COLLECTION_NAME: string = process.env.COLLECTION_NAME || 'gnani_collection';
-    
+
     // TEI Configuration
     private TEI_HOST: string = process.env.TEI_HOST || 'localhost';
     private TEI_PORT: string = process.env.TEI_PORT || '8080';
@@ -21,6 +23,12 @@ class VectorManager {
 
     constructor() {
         this.TEI_URL = `http://${this.TEI_HOST}:${this.TEI_PORT}`;
+        // Initialize batch processor: max 32 items, 50ms delay
+        this.batchProcessor = new BatchProcessor<string, number[]>(
+            this.processEmbeddingBatch.bind(this),
+            32,
+            50
+        );
         this.initialize();
     }
 
@@ -58,7 +66,14 @@ class VectorManager {
                 logger.warn(`ChromaDB heartbeat failed at ${chromaDbUrl}. Is the service running?`);
             }
 
-            this.collection = await this.client.getOrCreateCollection({ name: this.COLLECTION_NAME });
+            this.collection = await this.client.getOrCreateCollection({
+                name: this.COLLECTION_NAME,
+                metadata: {
+                    'hnsw:space': 'cosine',
+                    'hnsw:construction_ef': 200, // Higher = better recall
+                    'hnsw:M': 16 // Higher = better recall but more memory
+                }
+            });
             logger.info(`ChromaDB collection '${this.COLLECTION_NAME}' ready.`);
         } catch (error: any) {
             logger.error(`Failed to connect or initialize ChromaDB: ${error.message}`);
@@ -69,27 +84,36 @@ class VectorManager {
 
     /**
      * Generate embeddings using the external TEI service
+     * Uses BatchProcessor to group concurrent requests
      */
     async generateEmbedding(text: string): Promise<number[]> {
+        return this.batchProcessor.addToBatch('tei-embedding', text);
+    }
+
+    /**
+     * Internal method to process a batch of texts for embedding
+     */
+    private async processEmbeddingBatch(texts: string[]): Promise<number[][]> {
         try {
+            logger.debug(`Generating embeddings for batch of ${texts.length} texts`);
             const response = await axios.post(`${this.TEI_URL}/embed`, {
-                inputs: text,
+                inputs: texts,
                 normalize: true,
                 truncate: true
             }, {
-                timeout: 2000 // 2 second timeout
+                timeout: 5000 // Increased timeout for batch
             });
-            
-            // TEI returns an array of arrays for batch, or single array? 
-            // Usually [ [0.1, ...] ] for inputs: "string" or ["string"]
-            // We will assume inputs is treated as a batch of 1.
-            
-            const embedding = response.data[0]; 
-            return embedding;
+
+            // TEI returns array of arrays for batch input
+            const embeddings = response.data;
+            if (!Array.isArray(embeddings)) {
+                throw new Error('Invalid response format from TEI');
+            }
+            return embeddings;
         } catch (error: any) {
-            logger.error(`Error generating embedding via TEI: ${error.message}`);
-            // Return zero vector as fallback to prevent crash
-            return Array(384).fill(0); 
+            logger.error(`Error generating batch embeddings via TEI: ${error.message}`);
+            // Return zero vectors as fallback
+            return texts.map(() => Array(384).fill(0));
         }
     }
 
@@ -111,7 +135,7 @@ class VectorManager {
             // Check cache first
             const cacheKey = this.getCacheKey(userId, query, topK);
             const cachedResults = await redisClient.get(cacheKey);
-            
+
             if (cachedResults) {
                 const results = JSON.parse(cachedResults);
                 logger.debug(`Vector search - Cache HIT for query "${query.substring(0, 50)}..."`);
@@ -130,7 +154,7 @@ class VectorManager {
                 where: { userId: userId },
             });
 
-            const timeoutPromise = new Promise<any>((_, reject) => 
+            const timeoutPromise = new Promise<any>((_, reject) =>
                 setTimeout(() => reject(new Error('Vector search timed out')), 2000)
             );
 

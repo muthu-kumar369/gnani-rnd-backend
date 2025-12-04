@@ -16,13 +16,13 @@ export class AudioProcessor {
     private sessions: Map<string, AudioSession> = new Map();
     private MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB
     private BUFFER_WARNING_SIZE = 8 * 1024 * 1024; // 8MB
-    
+
     // Month-3: Select STT service based on feature flag
     private sttService = FEATURE_FLAGS.USE_WHISPER_CPP ? whisperCppService : whisperService;
 
     constructor() {
         this.logger = createContextualLogger({ module: 'AudioProcessor' });
-        
+
         const serviceName = FEATURE_FLAGS.USE_WHISPER_CPP ? 'Whisper.cpp' : 'Python Whisper';
         this.logger.info(`AudioProcessor initialized with ${serviceName}`);
     }
@@ -32,13 +32,13 @@ export class AudioProcessor {
             buffer: [],
             sampleRate: 16000
         });
-        
+
         this.logger.debug('Audio session initialized', { sessionId });
     }
 
     async appendChunk(
-        sessionId: string, 
-        chunk: Buffer, 
+        sessionId: string,
+        chunk: Buffer,
         sampleRate: number,
         onTranscript?: (transcript: string, isFinal: boolean) => void
     ): Promise<void> {
@@ -56,11 +56,47 @@ export class AudioProcessor {
 
         // Check for overflow
         if (newSize > this.MAX_BUFFER_SIZE) {
-            this.logger.warn('Buffer overflow, flushing', { sessionId, size: newSize });
+            this.logger.warn('Buffer overflow detected, processing accumulated audio before flushing', {
+                sessionId,
+                currentSize,
+                newSize,
+                maxSize: this.MAX_BUFFER_SIZE,
+                percentOver: Math.round(((newSize - this.MAX_BUFFER_SIZE) / this.MAX_BUFFER_SIZE) * 100)
+            });
+
+            // NEW: Send accumulated audio to Whisper before flushing
+            const combinedBuffer = Buffer.concat(session.buffer);
+            if (onTranscript && combinedBuffer.length > 0) {
+                this.logger.info('Sending accumulated audio to Whisper before flush', {
+                    sessionId,
+                    bufferSize: combinedBuffer.length,
+                    chunks: session.buffer.length
+                });
+
+                // Send to Whisper with isLastChunk = true to force transcription
+                this.sttService.sendAudioChunk(
+                    sessionId,
+                    combinedBuffer,
+                    (transcript: string, isFinal: boolean) => {
+                        this.logger.info('Received transcription from overflow buffer', {
+                            sessionId,
+                            transcript: transcript.substring(0, 100),
+                            isFinal
+                        });
+                        onTranscript(transcript, isFinal);
+                    },
+                    true // isLastChunk = true
+                );
+
+                // Notify user about long audio processing
+                onTranscript('(Processing long audio segment...)', false);
+            }
+
+            // Flush buffer
             await this.flush(sessionId);
             metrics.incrementAudioBufferOverflow(sessionId);
         }
-        
+
         // Warning at 80% capacity
         if (newSize > this.BUFFER_WARNING_SIZE && currentSize <= this.BUFFER_WARNING_SIZE) {
             this.logger.warn('Audio buffer approaching limit', {
@@ -93,13 +129,13 @@ export class AudioProcessor {
         if (!session || session.buffer.length === 0) return;
 
         const combinedBuffer = Buffer.concat(session.buffer);
-        
-        this.logger.debug('Audio buffer flushed', { 
+
+        this.logger.debug('Audio buffer flushed', {
             sessionId,
             bufferSize: combinedBuffer.length,
             chunks: session.buffer.length
         });
-        
+
         // Clear buffer
         // Clear buffer
         session.buffer = [];

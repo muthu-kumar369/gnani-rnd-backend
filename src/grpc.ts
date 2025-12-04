@@ -34,21 +34,21 @@ const StartSession = async (
 
   logger.debug('StartSession received call.request:', call.request);
   logger.debug('StartSession received call.metadata:', call.metadata);
-    const { user_id, session_id } = call.request;
-    try {
-      const onTranscriptionCallback = (transcript: string, isFinal: boolean) => {
-        logger.debug(
-          `StartSession callback received transcript for ${user_id}: ${transcript} (isFinal: ${isFinal})`
-        );
-      };
-
-      const newSessionId = await sessionCoordinator.startSession(
-        user_id,
-        onTranscriptionCallback,
-        undefined, // onLlmChunkCallback not used for StartSession
-        undefined, // onToolStatusCallback
-        session_id // Pass existing session ID if provided
+  const { user_id, session_id } = call.request;
+  try {
+    const onTranscriptionCallback = (transcript: string, isFinal: boolean) => {
+      logger.debug(
+        `StartSession callback received transcript for ${user_id}: ${transcript} (isFinal: ${isFinal})`
       );
+    };
+
+    const newSessionId = await sessionCoordinator.startSession(
+      user_id,
+      onTranscriptionCallback,
+      undefined, // onLlmChunkCallback not used for StartSession
+      undefined, // onToolStatusCallback
+      session_id // Pass existing session ID if provided
+    );
     logger.debug(`Generated newSessionId: ${newSessionId}`);
     logger.info(
       `gRPC StartSession successful. New session ID: ${newSessionId} for user: ${user_id}`
@@ -107,7 +107,7 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
               partial_text: transcript
             });
           }
-          
+
           if (!ok) {
             logger.warn(`gRPC buffer full for session ${sessionId} (transcription). Waiting for drain...`);
             await waitForDrain(grpcCall);
@@ -121,21 +121,43 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
       };
 
       session.onLlmChunkCallback = async (chunk: any) => {
-        logger.debug(`onLlmChunkCallback triggered for session ${sessionId}. Chunk: ${JSON.stringify(chunk)}`);
+        const chunkPreview = typeof chunk === 'string'
+          ? chunk.substring(0, 100)
+          : JSON.stringify(chunk).substring(0, 100);
+
+        logger.info(`[RESPONSE-FLOW-6] onLlmChunkCallback triggered`, {
+          sessionId,
+          chunkPreview,
+          chunkType: typeof chunk,
+          hasGrpcCall: !!grpcCall
+        });
+
         if (grpcCall) {
           // Serialize to JSON string to pass through gRPC string field
           const payload = typeof chunk === 'string' ? chunk : JSON.stringify(chunk);
+          logger.info(`[RESPONSE-FLOW-7] Writing LLM chunk to gRPC`, {
+            sessionId,
+            payloadLength: payload.length,
+            payloadPreview: payload.substring(0, 50)
+          });
+
           const ok = grpcCall.write({
             llm_chunk: payload
           });
 
+          logger.info(`[RESPONSE-FLOW-8] LLM chunk sent to frontend`, {
+            sessionId,
+            success: ok,
+            payloadPreview: payload.substring(0, 50)
+          });
+
           if (!ok) {
-            logger.warn(`gRPC buffer full for session ${sessionId} (LLM chunk). Waiting for drain...`);
+            logger.warn(`[RESPONSE-FLOW-WARN] gRPC buffer full for session ${sessionId} (LLM chunk). Waiting for drain...`);
             await waitForDrain(grpcCall);
-            logger.info(`gRPC buffer drained for session ${sessionId} (LLM chunk).`);
+            logger.info(`[RESPONSE-FLOW-9] gRPC buffer drained for session ${sessionId} (LLM chunk).`);
           }
         } else {
-          logger.warn(`grpcCall not available for session ${sessionId} in onLlmChunkCallback.`);
+          logger.error(`[RESPONSE-FLOW-ERROR] grpcCall not available for session ${sessionId} in onLlmChunkCallback`);
         }
       };
 
@@ -211,18 +233,32 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
 
       // Handle Audio Input
       if (chunk.audio_chunk && chunk.audio_chunk.length > 0) {
-        await sessionCoordinator.processAudioChunk(
-          currentSessionId,
-          chunk.audio_chunk,
-          16000
-        );
+        logger.info(`[AUDIO-FLOW-1] Received audio chunk for session ${currentSessionId}`, {
+          chunkSize: chunk.audio_chunk.length,
+          sampleRate: 16000,
+          timestamp: new Date().toISOString()
+        });
+
+        try {
+          await sessionCoordinator.processAudioChunk(
+            currentSessionId,
+            chunk.audio_chunk,
+            16000
+          );
+          logger.info(`[AUDIO-FLOW-2] Audio chunk processed successfully for session ${currentSessionId}`);
+        } catch (error: any) {
+          logger.error(`[AUDIO-FLOW-ERROR] Failed to process audio chunk for session ${currentSessionId}`, {
+            error: error.message,
+            stack: error.stack
+          });
+        }
       }
 
       if (chunk.end_of_stream) {
         logger.info(
           `End of audio stream received for session: ${currentSessionId}.`
         );
-        
+
         try {
           // Note: With new architecture, LLM responses stream via callbacks
           // No need for finalizeSessionProcessing
@@ -259,14 +295,14 @@ const EndSession = async (
   callback: grpc.sendUnaryData<any>
 ): Promise<void> => {
   const { session_id } = call.request;
-  
+
   if (!session_id) {
-      logger.warn('EndSession called without session_id');
-      callback({
-        code: grpc.status.INVALID_ARGUMENT,
-        details: 'Session ID is required',
-      });
-      return;
+    logger.warn('EndSession called without session_id');
+    callback({
+      code: grpc.status.INVALID_ARGUMENT,
+      details: 'Session ID is required',
+    });
+    return;
   }
 
   try {
