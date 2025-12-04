@@ -12,32 +12,62 @@ export class WhisperCppService {
   private whisperPath: string;
   private modelPath: string;
   private isAvailable: boolean = false;
+  private useWsl: boolean = false;
 
   constructor() {
     this.logger = createContextualLogger({ module: 'WhisperCppService' });
-    
+
+    // Default paths (will be overridden if WSL is used)
     const homeDir = os.homedir();
     this.whisperPath = path.join(homeDir, '.gnani', 'whisper-cpp', 'main');
     this.modelPath = path.join(homeDir, '.gnani', 'whisper-cpp', 'models', 'ggml-base.en.bin');
-    
+
     this.verifyInstallation();
   }
 
   private verifyInstallation(): void {
-    if (!fs.existsSync(this.whisperPath)) {
-      this.logger.warn(`Whisper.cpp not found at ${this.whisperPath}. Run setup script: ./scripts/shell/setup_whisper_cpp.sh`);
-      this.isAvailable = false;
+    // Check local installation first
+    if (fs.existsSync(this.whisperPath) && fs.existsSync(this.modelPath)) {
+      this.isAvailable = true;
+      this.useWsl = false;
+      this.logger.info('Whisper.cpp found locally (Windows/Native)');
       return;
     }
-    
-    if (!fs.existsSync(this.modelPath)) {
-      this.logger.warn(`Model not found at ${this.modelPath}. Run setup script.`);
+
+    // If on Windows, check WSL
+    if (os.platform() === 'win32') {
+      this.checkWslInstallation();
+    } else {
+      this.logger.warn(`Whisper.cpp not found at ${this.whisperPath}`);
       this.isAvailable = false;
-      return;
     }
-    
-    this.isAvailable = true;
-    this.logger.info('Whisper.cpp verified and ready');
+  }
+
+  private checkWslInstallation(): void {
+    try {
+      // Check if WSL is available and binary exists
+      // We check /root/.gnani/whisper-cpp/main as that's where it seems to be installed for root
+      const wslPath = '/root/.gnani/whisper-cpp/main';
+      const wslModelPath = '/root/.gnani/whisper-cpp/models/ggml-base.en.bin';
+
+      // Use wsl to check file existence
+      const checkCmd = `wsl -d UbuntuDistro [ -f "${wslPath}" ] && [ -f "${wslModelPath}" ] && echo "FOUND"`;
+      const result = require('child_process').execSync(checkCmd).toString().trim();
+
+      if (result === 'FOUND') {
+        this.isAvailable = true;
+        this.useWsl = true;
+        this.whisperPath = wslPath;
+        this.modelPath = wslModelPath;
+        this.logger.info('Whisper.cpp found in WSL (UbuntuDistro)');
+      } else {
+        this.logger.warn('Whisper.cpp not found in WSL (UbuntuDistro) at /root/.gnani/whisper-cpp');
+        this.isAvailable = false;
+      }
+    } catch (error) {
+      this.logger.warn('Failed to check WSL installation', { error });
+      this.isAvailable = false;
+    }
   }
 
   async transcribe(sessionId: string, audioBuffer: Buffer, sampleRate: number): Promise<string> {
@@ -49,13 +79,13 @@ export class WhisperCppService {
 
     // Save audio to temp file (whisper.cpp requires file input)
     const tempFile = path.join(os.tmpdir(), `audio-${sessionId}-${Date.now()}.wav`);
-    
+
     try {
       // Write WAV file with proper header
       this.writeWavFile(tempFile, audioBuffer, sampleRate);
 
       const transcript = await this.runWhisper(tempFile);
-      
+
       // Record metrics
       const duration = Date.now() - startTime;
       metrics.recordSTTLatency(duration);
@@ -87,18 +117,18 @@ export class WhisperCppService {
 
   // Month-3: Add compatibility method for AudioProcessor
   async sendAudioChunk(
-    sessionId: string, 
-    chunk: Buffer, 
+    sessionId: string,
+    chunk: Buffer,
     callback: (transcript: string, isFinal: boolean) => void,
     isFinal: boolean = false
   ): Promise<void> {
     // For now, Whisper.cpp service is designed for file-based transcription
     // We'll accumulate chunks in the AudioProcessor buffer and transcribe only when needed
     // This method is a placeholder to satisfy the interface
-    
+
     if (isFinal) {
-        // If it's the final chunk, we could trigger transcription here
-        // But AudioProcessor calls transcribe() separately
+      // If it's the final chunk, we could trigger transcription here
+      // But AudioProcessor calls transcribe() separately
     }
   }
 
@@ -109,12 +139,12 @@ export class WhisperCppService {
     const blockAlign = numChannels * (bitsPerSample / 8);
 
     const header = Buffer.alloc(44);
-    
+
     // RIFF header
     header.write('RIFF', 0);
     header.writeUInt32LE(36 + audioBuffer.length, 4);
     header.write('WAVE', 8);
-    
+
     // fmt chunk
     header.write('fmt ', 12);
     header.writeUInt32LE(16, 16); // fmt chunk size
@@ -124,7 +154,7 @@ export class WhisperCppService {
     header.writeUInt32LE(byteRate, 28);
     header.writeUInt16LE(blockAlign, 32);
     header.writeUInt16LE(bitsPerSample, 34);
-    
+
     // data chunk
     header.write('data', 36);
     header.writeUInt32LE(audioBuffer.length, 40);
@@ -135,13 +165,36 @@ export class WhisperCppService {
 
   private runWhisper(audioFile: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const whisper = spawn(this.whisperPath, [
-        '-m', this.modelPath,
-        '-f', audioFile,
-        '-nt', // No timestamps
-        '-l', 'en', // English
-        '-t', '4' // 4 threads
-      ]);
+      let cmd: string;
+      let args: string[];
+
+      if (this.useWsl) {
+        // Convert Windows path to WSL path
+        // e.g. C:\Users\foo\temp.wav -> /mnt/c/Users/foo/temp.wav
+        const wslAudioFile = audioFile.replace(/^([a-zA-Z]):/, (match, drive) => `/mnt/${drive.toLowerCase()}`).replace(/\\/g, '/');
+
+        cmd = 'wsl';
+        args = [
+          '-d', 'UbuntuDistro',
+          this.whisperPath,
+          '-m', this.modelPath,
+          '-f', wslAudioFile,
+          '-nt', // No timestamps
+          '-l', 'en', // English
+          '-t', '4' // 4 threads
+        ];
+      } else {
+        cmd = this.whisperPath;
+        args = [
+          '-m', this.modelPath,
+          '-f', audioFile,
+          '-nt', // No timestamps
+          '-l', 'en', // English
+          '-t', '4' // 4 threads
+        ];
+      }
+
+      const whisper = spawn(cmd, args);
 
       let output = '';
       let error = '';
@@ -172,7 +225,7 @@ export class WhisperCppService {
   private parseOutput(output: string): string {
     // Whisper.cpp output format:
     // [00:00:00.000 --> 00:00:02.000]   Transcript text here
-    
+
     const lines = output.split('\n');
     const transcriptLines: string[] = [];
 

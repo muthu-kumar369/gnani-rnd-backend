@@ -7,7 +7,7 @@ import {
 } from "../../config/env.config.js";
 
 const createBaseLogger = (defaultMeta: object = {}): Logger => {
-  const transports = [
+  const transports: winston.transport[] = [
     new winston.transports.Console({
       format: winston.format.combine(
         winston.format.colorize(),
@@ -17,11 +17,17 @@ const createBaseLogger = (defaultMeta: object = {}): Logger => {
     new winston.transports.File({
       filename: LOG_FILE_ERROR,
       level: "error",
-      format: winston.format.json(),
+      format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.json()
+      ),
     }),
     new winston.transports.File({
       filename: LOG_FILE_COMBINED,
-      format: winston.format.json(),
+      format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.json()
+      ),
     }),
   ];
 
@@ -33,7 +39,7 @@ const createBaseLogger = (defaultMeta: object = {}): Logger => {
       winston.format.splat(),
       winston.format.json()
     ),
-    defaultMeta: defaultMeta,
+    defaultMeta: { service: 'gnani-backend', ...defaultMeta },
     transports: transports,
   });
 };

@@ -50,7 +50,7 @@ class ExportService {
             });
 
             markdown += `## Message ${i + 1}\n\n`;
-            markdown += `**Type**: ${this.capitalizeFirst(msg.type)}\n`;
+            markdown += `**Type**: ${this.capitalizeFirst(msg.role)}\n`;
             markdown += `**Time**: ${timestamp}\n`;
 
             // Add token usage if available (for gnani messages)
@@ -113,7 +113,7 @@ class ExportService {
             messageCount: messages.length,
             messages: messages.map((msg) => ({
                 id: msg._id,
-                type: msg.type,
+                type: msg.role,
                 content: msg.content,
                 timestamp: msg.timestamp,
                 parentId: msg.parentId,

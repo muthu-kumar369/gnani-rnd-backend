@@ -69,12 +69,16 @@ mkdir -p $INSTALL_DIR
 
 # Copy binaries and models
 # Copy binaries and models
-if [ -f "bin/main" ]; then
+# Copy binaries and models
+if [ -f "build/bin/main" ]; then
+    cp build/bin/main $INSTALL_DIR/
+elif [ -f "bin/main" ]; then
     cp bin/main $INSTALL_DIR/
 elif [ -f "main" ]; then
     cp main $INSTALL_DIR/
 else
-    echo "ERROR: Compiled binary 'main' not found in . or bin/"
+    echo "ERROR: Compiled binary 'main' not found in build/bin/, bin/, or ."
+    find . -name main -type f
     exit 1
 fi
 

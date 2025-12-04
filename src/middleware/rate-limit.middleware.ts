@@ -5,19 +5,22 @@ import { createContextualLogger } from '../core/logger/logger.js';
 
 const logger = createContextualLogger({ module: 'RateLimitMiddleware' });
 
+// Helper to create Redis store
+const createRedisStore = () => new RedisStore({
+    // @ts-ignore - rate-limit-redis types are strict about the command signature
+    sendCommand: (...args: string[]) => redisClient.call(...args),
+});
+
 // Global API Rate Limiter
-// 100 requests per 15 minutes per IP
+// 300 requests per 15 minutes per IP (Increased from 100 for better UX)
 export const globalRateLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // Limit each IP to 100 requests per windowMs
+    max: 300,
     standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
     legacyHeaders: false, // Disable the `X-RateLimit-*` headers
-    store: new RedisStore({
-        // @ts-ignore - rate-limit-redis types are strict about the command signature
-        sendCommand: (...args: string[]) => redisClient.call(...args),
-    }),
+    store: createRedisStore(),
     handler: (req, res, next, options) => {
-        logger.warn(`Rate limit exceeded for IP: ${req.ip}`);
+        logger.warn(`Global rate limit exceeded for IP: ${req.ip}`);
         res.status(options.statusCode).json({
             error: 'Too many requests',
             message: 'You have exceeded the request limit. Please try again later.'
@@ -29,17 +32,14 @@ export const globalRateLimiter = rateLimit({
     }
 });
 
-// Strict Rate Limiter for Sensitive Endpoints (e.g., Auth)
-// 5 requests per 15 minutes per IP
+// Strict Rate Limiter for Sensitive Endpoints (e.g., Auth, Payment)
+// 10 requests per 15 minutes per IP (Increased from 5)
 export const strictRateLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 5,
+    max: 10,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new RedisStore({
-        // @ts-ignore
-        sendCommand: (...args: string[]) => redisClient.call(...args),
-    }),
+    store: createRedisStore(),
     handler: (req, res, next, options) => {
         logger.warn(`Strict rate limit exceeded for IP: ${req.ip} on ${req.originalUrl}`);
         res.status(options.statusCode).json({
@@ -50,15 +50,12 @@ export const strictRateLimiter = rateLimit({
 });
 
 // DDoS Protection Limiter (Burst protection)
-// 50 requests per 1 minute
+// 100 requests per 1 minute (Increased from 50)
 export const burstLimiter = rateLimit({
     windowMs: 1 * 60 * 1000, // 1 minute
-    max: 50,
+    max: 100,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new RedisStore({
-        // @ts-ignore
-        sendCommand: (...args: string[]) => redisClient.call(...args),
-    }),
+    store: createRedisStore(),
     message: 'Too many requests, please slow down.'
 });

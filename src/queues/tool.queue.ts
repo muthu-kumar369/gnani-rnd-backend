@@ -1,6 +1,6 @@
 // gnani-rnd-backend/src/queues/tool.queue.ts
 
-import { Queue, Worker, Job } from 'bullmq';
+import { Queue, Worker, Job, QueueEvents } from 'bullmq';
 import redisClient from '../config/redis.config.js';
 import toolRegistry from '../modules/tools/tool.registry.js';
 import { createContextualLogger } from '../core/logger/logger.js';
@@ -8,6 +8,7 @@ import { createContextualLogger } from '../core/logger/logger.js';
 const logger = createContextualLogger({ module: 'ToolQueue' });
 
 export const toolQueue = new Queue('tools', { connection: redisClient });
+export const toolQueueEvents = new QueueEvents('tools', { connection: redisClient });
 
 // Worker to process tool execution
 export const toolWorker = new Worker(

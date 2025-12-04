@@ -81,7 +81,14 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
   ) => {
     const waitForDrain = (stream: grpc.ServerDuplexStream<any, any>): Promise<void> => {
       return new Promise((resolve) => {
-        stream.once('drain', resolve);
+        const timeout = setTimeout(() => {
+          logger.warn('waitForDrain timed out after 2000ms. Proceeding anyway.');
+          resolve();
+        }, 2000);
+        stream.once('drain', () => {
+          clearTimeout(timeout);
+          resolve();
+        });
       });
     };
 
@@ -133,8 +140,13 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
         });
 
         if (grpcCall) {
-          // Serialize to JSON string to pass through gRPC string field
-          const payload = typeof chunk === 'string' ? chunk : JSON.stringify(chunk);
+          // Wrap in JSON structure to ensure frontend can parse it
+          const payloadObj = {
+            type: 'partial',
+            text: typeof chunk === 'string' ? chunk : JSON.stringify(chunk)
+          };
+          const payload = JSON.stringify(payloadObj);
+
           logger.info(`[RESPONSE-FLOW-7] Writing LLM chunk to gRPC`, {
             sessionId,
             payloadLength: payload.length,
@@ -261,7 +273,8 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
 
         try {
           // Note: With new architecture, LLM responses stream via callbacks
-          // No need for finalizeSessionProcessing
+          // We need to ensure the final audio chunk is processed and STT is finalized
+          await sessionCoordinator.finishAudioStream(currentSessionId);
         } catch (error: any) {
           logger.error(`Error in session ${currentSessionId}: ${error.message}`);
         } finally {

@@ -4,6 +4,7 @@ import llmService from '../llm/llm.service.js';
 import shortTermMemory from '../memory/services/short-term-memory.service.js';
 import { createContextualLogger } from '../../core/logger/logger.js';
 import { Types } from 'mongoose';
+import sessionCoordinator from '../session/session.coordinator.js';
 
 interface PaginationOptions {
     page?: number;
@@ -284,6 +285,22 @@ class ConversationService {
     }
 
     /**
+     * Create a new conversation explicitly
+     */
+    async createConversation(userId: string, systemPrompt?: string) {
+        const sessionId = `sess_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const conversation = await Conversation.create({
+            userId,
+            sessionId,
+            title: 'New Conversation',
+            systemPrompt: systemPrompt || "You are Gnani, a helpful AI assistant.",
+            createdAt: new Date(),
+            updatedAt: new Date()
+        });
+        return conversation;
+    }
+
+    /**
      * Regenerate the last assistant response
      */
     async regenerateResponse(sessionId: string, messageId: string, userId: string) {
@@ -297,42 +314,83 @@ class ConversationService {
             throw new Error('Parent message not found');
         }
 
-        // Generate new response
-        // We need to reconstruct the prompt context. For simplicity, we'll just use the parent message for now,
-        // but ideally we should rebuild the history up to that point.
-        // TODO: Rebuild full history context for regeneration
+        // Generate new response via SessionCoordinator
+        // This ensures consistent RAG, Tool Execution, and Context management
+        await this._ensureCoordinatorSession(sessionId, userId);
+        
+        // We pass the parent message content as if it were a new input, 
+        // but the coordinator handles it as a "text input" event.
+        // Note: Ideally, we should have a specific "regenerate" method in coordinator,
+        // but processTextInput is a reasonable proxy for now as it triggers the full pipeline.
+        const result = await sessionCoordinator.processTextInput(sessionId, parentMessage.content);
 
-        const prompt = {
-            session_id: sessionId,
-            user_id: userId,
-            system_message: "You are Gnani, a helpful AI assistant.", // Should get from config or context
-            current_user_query: parentMessage.content,
-            conversation_history: [], // Should fetch history
-            classified_intent: 'general_query'
-        };
+        // The coordinator saves the message to DB, but we need to return it here.
+        // Since coordinator saves it, we fetch the latest assistant message.
+        const newMessage = await ConversationMessage.findOne({ sessionId, role: 'assistant' })
+            .sort({ timestamp: -1 })
+            .lean();
 
-        const response = await llmService.getLlmResponse(prompt);
+        if (!newMessage) {
+             throw new Error('Failed to generate new response');
+        }
 
-        // Create new sibling message
-        const newMessage = await ConversationMessage.create({
-            userId,
-            sessionId,
-            role: 'assistant',
-            content: response.text,
-            parentId: message.parentId,
-            branchIndex: (message.branchIndex || 0) + 1,
-            metadata: {
-                ...message.metadata,
-                regeneratedFrom: messageId
+        // Update parent's children if not already linked (coordinator might handle this differently, 
+        // but let's ensure linkage)
+        if (!parentMessage.children?.includes(newMessage._id.toString())) {
+             parentMessage.children = parentMessage.children || [];
+             parentMessage.children.push(newMessage._id.toString());
+             await parentMessage.save();
+        }
+        
+        // Update metadata to link to original message
+        await ConversationMessage.findByIdAndUpdate(newMessage._id, {
+            $set: {
+                parentId: message.parentId,
+                branchIndex: (message.branchIndex || 0) + 1,
+                metadata: {
+                    ...newMessage.metadata,
+                    regeneratedFrom: messageId
+                }
             }
         });
 
-        // Update parent's children
-        parentMessage.children = parentMessage.children || [];
-        parentMessage.children.push(newMessage._id.toString());
-        await parentMessage.save();
-
         return newMessage;
+    }
+
+    /**
+     * Helper to ensure session exists in coordinator
+     */
+    private async _ensureCoordinatorSession(sessionId: string, userId: string) {
+        if (!sessionCoordinator.getSession(sessionId)) {
+            // Start a session with dummy callbacks since we await the result directly
+            await sessionCoordinator.startSession(
+                userId,
+                async (transcript, isFinal) => { /* no-op for REST */ },
+                async (text) => { /* no-op for REST */ },
+                async (status) => { /* no-op for REST */ },
+                sessionId
+            );
+        }
+    }
+
+    /**
+     * Send a new message (REST API)
+     */
+    async sendMessage(sessionId: string, userId: string, content: string) {
+        await this._ensureCoordinatorSession(sessionId, userId);
+        
+        // Process via coordinator
+        const result = await sessionCoordinator.processTextInput(sessionId, content);
+        
+        // Fetch the newly created messages (User + Assistant)
+        // We assume the last 2 messages are the ones we just created
+        const messages = await ConversationMessage.find({ sessionId })
+            .sort({ timestamp: -1 })
+            .limit(2)
+            .lean();
+            
+        // Return them in chronological order (User, then Assistant)
+        return messages.reverse();
     }
 
     /**
@@ -367,28 +425,24 @@ class ConversationService {
             }
         }
 
-        // Generate new assistant response
-        const prompt = {
-            session_id: sessionId,
-            user_id: userId,
-            system_message: "You are Gnani, a helpful AI assistant.",
-            current_user_query: newContent,
-            conversation_history: [], // Should fetch history
-            classified_intent: 'general_query'
-        };
+        // Generate new assistant response via SessionCoordinator
+        await this._ensureCoordinatorSession(sessionId, userId);
+        const result = await sessionCoordinator.processTextInput(sessionId, newContent);
 
-        const response = await llmService.getLlmResponse(prompt);
+        // Fetch the latest assistant message
+        const newAssistantMessage = await ConversationMessage.findOne({ sessionId, role: 'assistant' })
+            .sort({ timestamp: -1 })
+            .lean();
 
-        const newAssistantMessage = await ConversationMessage.create({
-            userId,
-            sessionId,
-            role: 'assistant',
-            content: response.text,
+        if (!newAssistantMessage) {
+            throw new Error('Failed to generate response for edited message');
+        }
+
+        // Link assistant message to the new user message
+        // Note: Coordinator creates messages independently, so we need to fix the parentId
+        await ConversationMessage.findByIdAndUpdate(newAssistantMessage._id, {
             parentId: newUserMessage._id.toString(),
-            branchIndex: 0, // First response in this new branch
-            metadata: {
-                intent: 'general_query'
-            }
+            branchIndex: 0
         });
 
         newUserMessage.children = [newAssistantMessage._id.toString()];

@@ -18,13 +18,24 @@ export class AudioProcessor {
     private BUFFER_WARNING_SIZE = 8 * 1024 * 1024; // 8MB
 
     // Month-3: Select STT service based on feature flag
-    private sttService = FEATURE_FLAGS.USE_WHISPER_CPP ? whisperCppService : whisperService;
+    private sttService;
 
     constructor() {
         this.logger = createContextualLogger({ module: 'AudioProcessor' });
 
-        const serviceName = FEATURE_FLAGS.USE_WHISPER_CPP ? 'Whisper.cpp' : 'Python Whisper';
-        this.logger.info(`AudioProcessor initialized with ${serviceName}`);
+        // Automatic Fallback Logic
+        if (FEATURE_FLAGS.USE_WHISPER_CPP) {
+            if (whisperCppService.isReady()) {
+                this.sttService = whisperCppService;
+                this.logger.info('AudioProcessor initialized with Whisper.cpp');
+            } else {
+                this.sttService = whisperService;
+                this.logger.warn('Whisper.cpp enabled but not ready. Falling back to Python Whisper.');
+            }
+        } else {
+            this.sttService = whisperService;
+            this.logger.info('AudioProcessor initialized with Python Whisper');
+        }
     }
 
     async initialize(sessionId: string): Promise<void> {
@@ -137,9 +148,65 @@ export class AudioProcessor {
         });
 
         // Clear buffer
-        // Clear buffer
         session.buffer = [];
         metrics.setAudioBufferSize(sessionId, 0);
+    }
+
+    async finishStream(sessionId: string, onTranscript: (transcript: string, isFinal: boolean) => void): Promise<void> {
+        const session = this.sessions.get(sessionId);
+        if (!session) return;
+
+        this.logger.info('Finishing audio stream', { sessionId });
+
+        // Send empty buffer with isLastChunk = true to force transcription of accumulated audio
+        // We do NOT send session.buffer again to avoid duplication, as chunks were already sent in appendChunk
+        const emptyBuffer = Buffer.alloc(0);
+
+        // Clear buffer immediately as we've sent the signal
+        session.buffer = [];
+        metrics.setAudioBufferSize(sessionId, 0);
+
+        return new Promise<void>((resolve) => {
+            let resolved = false;
+            const safeResolve = () => {
+                if (!resolved) {
+                    resolved = true;
+                    resolve();
+                }
+            };
+
+            // Timeout to prevent hanging if STT service fails to respond
+            const timeoutId = setTimeout(() => {
+                if (!resolved) {
+                    this.logger.warn('Timeout waiting for final transcription in finishStream', { sessionId });
+                    safeResolve();
+                }
+            }, 5000); // 5 seconds timeout
+
+            this.sttService.sendAudioChunk(
+                sessionId,
+                emptyBuffer,
+                async (transcript: string, isFinal: boolean) => {
+                    this.logger.info('Received final transcription from finishStream', {
+                        sessionId,
+                        transcript: transcript.substring(0, 100),
+                        isFinal
+                    });
+
+                    // Await the callback to ensure downstream processing (LLM, etc.) completes
+                    // before we resolve the finishStream promise.
+                    if (onTranscript) {
+                        await onTranscript(transcript, isFinal);
+                    }
+
+                    if (isFinal) {
+                        clearTimeout(timeoutId);
+                        safeResolve();
+                    }
+                },
+                true // isLastChunk = true
+            );
+        });
     }
 
     async cleanup(sessionId: string): Promise<void> {

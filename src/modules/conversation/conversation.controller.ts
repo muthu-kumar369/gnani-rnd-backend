@@ -24,6 +24,20 @@ class ConversationController {
         }
     }
 
+    async createConversation(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { systemPrompt } = req.body;
+            const conversation = await conversationService.createConversation(userId, systemPrompt);
+            res.status(201).json(conversation);
+        } catch (error) {
+            console.error('Error creating conversation:', error);
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
+    }
+
     async getConversation(req: AuthenticatedRequest, res: Response) {
         try {
             const userId = req.user?.id;
@@ -149,6 +163,24 @@ class ConversationController {
             res.json(result);
         } catch (error: any) {
             console.error('Error deleting message:', error);
+            res.status(500).json({ error: error.message || 'Internal Server Error' });
+        }
+    }
+
+    async sendMessage(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { id } = req.params;
+            const { content } = req.body;
+
+            if (!content) return res.status(400).json({ error: 'Content is required' });
+
+            const result = await conversationService.sendMessage(id, userId, content);
+            res.json(result);
+        } catch (error: any) {
+            console.error('Error sending message:', error);
             res.status(500).json({ error: error.message || 'Internal Server Error' });
         }
     }

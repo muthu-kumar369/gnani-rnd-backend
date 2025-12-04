@@ -1,10 +1,10 @@
-// src/modules/session/tool.executor.ts
 import { createContextualLogger } from '../../core/logger/logger.js';
 import toolRegistry from '../tools/tool.registry.js';
 import metrics from '../../core/monitoring/metrics.js';
 import toolCache from '../../core/cache/tool-cache.service.js';
 import FEATURE_FLAGS from '../../config/feature-flags.js';
 import { Logger } from 'winston';
+import { toolQueue, toolQueueEvents } from '../../queues/tool.queue.js';
 
 export class ToolExecutor {
     private logger: Logger;
@@ -62,10 +62,24 @@ export class ToolExecutor {
                 // Month-2: Track tool execution duration
                 const startTime = Date.now();
 
-                // NEW: Execute with timeout protection
+                // NEW: Execute via Queue with timeout protection
                 const timeout = this.toolTimeouts.get(toolName) || this.DEFAULT_TIMEOUT_MS;
+
+                // Add job to queue
+                const job = await toolQueue.add('execute-tool', {
+                    toolName,
+                    params: toolParams,
+                    sessionId
+                }, {
+                    removeOnComplete: true,
+                    removeOnFail: true // We handle errors via catch
+                });
+
+                this.logger.info(`Added tool execution job to queue`, { jobId: job.id, tool: toolName });
+
+                // Wait for job completion
                 const result = await Promise.race([
-                    toolRegistry.executeTool(toolName, toolParams, onStatus),
+                    job.waitUntilFinished(toolQueueEvents),
                     this.createTimeout(timeout, toolName)
                 ]);
 
@@ -83,7 +97,7 @@ export class ToolExecutor {
 
                 results.push(result);
 
-                this.logger.info('Tool execution completed', {
+                this.logger.info('Tool execution completed via queue', {
                     sessionId,
                     tool: toolName,
                     success: true,

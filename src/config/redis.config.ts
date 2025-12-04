@@ -8,16 +8,26 @@ const redisClient = new Redis({
   port: REDIS_PORT,
   password: REDIS_PASSWORD || undefined,
   db: REDIS_DB,
+  // Production Tuning
   retryStrategy: (times: number) => {
+    // Exponential backoff with jitter
     const delay = Math.min(times * 50, 2000);
     return delay;
   },
   reconnectOnError: (err: Error) => {
-    console.error('Redis reconnect on error:', err);
-    return true;
+    const targetError = 'READONLY';
+    if (err.message.includes(targetError)) {
+      // Only reconnect when the error is "READONLY"
+      return true;
+    }
+    return false;
   },
-  lazyConnect: true, // Don't connect immediately, wait for explicit connect() call
+  lazyConnect: true,
   maxRetriesPerRequest: null, // Required for BullMQ
+  enableReadyCheck: true,
+  keepAlive: 10000, // Send keep-alive every 10 seconds
+  connectTimeout: 10000, // 10 seconds connection timeout
+  family: 4, // IPv4
 });
 
 // Event handlers

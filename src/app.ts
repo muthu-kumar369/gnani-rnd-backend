@@ -16,6 +16,9 @@ import { startTracing } from './core/monitoring/tracing.js';
 import shutdownManager from './core/shutdown/shutdown-manager.js';
 import metrics from './core/monitoring/metrics.js';
 
+import { templateService } from './modules/template/template.service.js';
+import { toolService } from './modules/tool/tool.service.js';
+
 // Initialize services
 (async () => {
     try {
@@ -31,6 +34,11 @@ import metrics from './core/monitoring/metrics.js';
 
         // Connect to MongoDB
         await connectDB();
+        
+        // Seed default templates
+        await templateService.seedDefaults();
+        // Seed default tools
+        await toolService.seedDefaults();
 
         // Start Express.js server and get the http.Server instance
         const httpServer = startExpressServer();

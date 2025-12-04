@@ -138,6 +138,24 @@ export class SessionCoordinator {
         this.logger.info(`[AUDIO-FLOW-6] Audio processor appendChunk completed for session ${sessionId}`);
     }
 
+    async finishAudioStream(sessionId: string): Promise<void> {
+        this.logger.info(`[AUDIO-FLOW-FINISH] Finishing audio stream for session ${sessionId}`);
+        const session = this.sessions.get(sessionId);
+        if (!session) {
+            this.logger.warn(`Session ${sessionId} not found when finishing audio stream`);
+            return;
+        }
+
+        await this.audioProcessor.finishStream(sessionId, (transcript: string, isFinal: boolean) => {
+            this.logger.info(`[AUDIO-FLOW-FINISH-CALLBACK] Transcript received`, {
+                sessionId,
+                transcript: transcript.substring(0, 100),
+                isFinal
+            });
+            this.processTranscript(sessionId, transcript, isFinal);
+        });
+    }
+
     async processTranscript(sessionId: string, transcript: string, isFinal: boolean): Promise<void> {
         this.logger.info(`[AUDIO-FLOW-7] Processing transcript`, {
             sessionId,

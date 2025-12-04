@@ -2,16 +2,28 @@ import express from 'express';
 import conversationController from './conversation.controller.js';
 import { authMiddleware } from '../../core/security/auth.middleware.js';
 
+import { validate } from '../../middleware/zod.middleware.js';
+import {
+    createConversationSchema,
+    searchConversationSchema,
+    updateConversationTitleSchema,
+    editMessageSchema,
+    updateSystemPromptSchema
+} from '../../schemas/conversation.schema.js';
+
 const router = express.Router();
 
 // Apply authentication middleware to all routes
 router.use(authMiddleware);
 
+// Create conversation
+router.post('/', validate(createConversationSchema), conversationController.createConversation);
+
 // List conversations
 router.get('/', conversationController.listConversations);
 
 // Search conversations
-router.post('/search', conversationController.searchConversations);
+router.post('/search', validate(searchConversationSchema), conversationController.searchConversations);
 
 // Get single conversation
 router.get('/:id', conversationController.getConversation);
@@ -20,22 +32,25 @@ router.get('/:id', conversationController.getConversation);
 router.delete('/:id', conversationController.deleteConversation);
 
 // Update title
-router.patch('/:id/title', conversationController.updateTitle);
+router.patch('/:id/title', validate(updateConversationTitleSchema), conversationController.updateTitle);
 
 // Regenerate response
 router.post('/:id/regenerate', conversationController.regenerateResponse);
 
 // Edit message
-router.post('/:id/edit', conversationController.editMessage);
+router.post('/:id/edit', validate(editMessageSchema), conversationController.editMessage);
 
 // Delete message
 router.delete('/:id/messages/:messageId', conversationController.deleteMessage);
+
+// Send message (Text Chat)
+router.post('/:id/messages', conversationController.sendMessage);
 
 // Get prompt templates
 router.get('/prompt-templates', conversationController.getPromptTemplates);
 
 // Update system prompt
-router.patch('/:id/system-prompt', conversationController.updateSystemPrompt);
+router.patch('/:id/system-prompt', validate(updateSystemPromptSchema), conversationController.updateSystemPrompt);
 
 // Export conversation
 router.get('/:sessionId/export/markdown', conversationController.exportMarkdown);

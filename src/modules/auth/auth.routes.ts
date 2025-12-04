@@ -4,12 +4,15 @@ import authController from './auth.controller.js';
 import { authMiddleware } from '../../core/security/auth.middleware.js';
 import { authLimiter, oauthStartLimiter, oauthCallbackLimiter, oauthLinkLimiter } from '../../config/rate-limit.config.js';
 
+import { validate } from '../../middleware/zod.middleware.js';
+import { registerSchema, loginSchema, refreshTokenSchema } from '../../schemas/auth.schema.js';
+
 const router = Router();
 
 // Auth Routes
-router.post('/register', authLimiter, authController.register);
-router.post('/login', authLimiter, authController.login);
-router.post('/refresh-token', authLimiter, authController.refreshToken);
+router.post('/register', authLimiter, validate(registerSchema), authController.register);
+router.post('/login', authLimiter, validate(loginSchema), authController.login);
+router.post('/refresh-token', authLimiter, validate(refreshTokenSchema), authController.refreshToken);
 router.post('/logout', authMiddleware, authController.logout);
 
 // OAuth Routes
