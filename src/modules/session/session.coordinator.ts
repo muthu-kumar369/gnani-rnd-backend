@@ -232,9 +232,29 @@ export class SessionCoordinator {
         try {
             this.logger.info(`[AUDIO-FLOW-12] Processing final transcript for session ${sessionId}: "${transcript.substring(0, 50)}..."`);
 
-            // Step 1: Fetch conversation to get custom system prompt
+            // Step 1: Fetch conversation to get custom system prompt, current model, and current template
             const conversation = await Conversation.findOne({ sessionId }).lean();
             const customSystemPrompt = conversation?.systemPrompt;
+            const currentModel = conversation?.currentModel || 'gemma:2b'; // Default to gemma:2b
+            const currentTemplateId = conversation?.currentTemplate;
+
+            this.logger.info(`[MODEL-TEMPLATE] Using model: ${currentModel}, template: ${currentTemplateId || 'default'}`);
+
+            // If template is specified, fetch its system prompt
+            let templateSystemPrompt = customSystemPrompt;
+            if (currentTemplateId) {
+                try {
+                    const templateService = await import('../template/template.service.js');
+                    const template = await templateService.default.getById(currentTemplateId);
+                    if (template?.systemPrompt) {
+                        templateSystemPrompt = template.systemPrompt;
+                        this.logger.info(`[TEMPLATE] Using template system prompt from: ${template.name}`);
+                    }
+                } catch (templateError: any) {
+                    this.logger.warn(`Failed to fetch template ${currentTemplateId}: ${templateError.message}`);
+                    // Continue with custom system prompt or default
+                }
+            }
 
             // Save User Message to MongoDB
             try {
@@ -257,13 +277,14 @@ export class SessionCoordinator {
                 session.userId,
                 transcript,
                 undefined, // attachments
-                customSystemPrompt
+                templateSystemPrompt // Use template's system prompt if available
             );
             const contextDuration = Date.now() - contextStartTime;
             this.logger.info(`[AUDIO-FLOW-14] Context built for session ${sessionId}`, {
                 duration: contextDuration,
                 hasContext: !!context,
-                customPrompt: !!customSystemPrompt
+                customPrompt: !!templateSystemPrompt,
+                usingTemplate: !!currentTemplateId
             });
 
             // Emit typing status: thinking
@@ -292,13 +313,15 @@ export class SessionCoordinator {
             const llmStartTime = Date.now();
             const response = await this.llmExecutor.generate(
                 context,
-                session.onLlmChunkCallback
+                session.onLlmChunkCallback,
+                currentModel // Pass the model to use
             );
             const llmDuration = Date.now() - llmStartTime;
             this.logger.info(`[AUDIO-FLOW-16] LLMExecutor returned for session ${sessionId}`, {
                 duration: llmDuration,
                 responseLength: response?.text?.length || 0,
-                hasToolCalls: !!(response?.toolCalls?.length)
+                hasToolCalls: !!(response?.toolCalls?.length),
+                modelUsed: currentModel
             });
 
             // Save Assistant Message to MongoDB
@@ -314,7 +337,7 @@ export class SessionCoordinator {
                         outputTokens: response.tokenUsage.completionTokens,
                         totalTokens: response.tokenUsage.totalTokens,
                         estimatedCost: 0, // TODO: Calculate cost if needed
-                        model: 'ollama' // Default or fetch from config
+                        model: currentModel // Save the model used for this response
                     } : undefined
                 });
             } catch (dbError: any) {

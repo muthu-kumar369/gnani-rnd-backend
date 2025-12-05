@@ -223,6 +223,56 @@ class ConversationController {
         }
     }
 
+    async updateTemplate(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { id } = req.params;
+            const { templateId } = req.body;
+
+            if (!templateId) {
+                return res.status(400).json({ error: 'templateId is required' });
+            }
+
+            const result = await conversationService.updateConversationTemplate(id, userId, templateId);
+
+            if (!result) {
+                return res.status(404).json({ error: 'Conversation not found' });
+            }
+
+            res.json(result);
+        } catch (error) {
+            console.error('Error updating template:', error);
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
+    }
+
+    async updateModel(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { id } = req.params;
+            const { modelId } = req.body;
+
+            if (!modelId) {
+                return res.status(400).json({ error: 'modelId is required' });
+            }
+
+            const result = await conversationService.updateConversationModel(id, userId, modelId);
+
+            if (!result) {
+                return res.status(404).json({ error: 'Conversation not found' });
+            }
+
+            res.json(result);
+        } catch (error) {
+            console.error('Error updating model:', error);
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
+    }
+
     async exportMarkdown(req: AuthenticatedRequest, res: Response) {
         try {
             const userId = req.user?.id;

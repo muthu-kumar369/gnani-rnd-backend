@@ -30,10 +30,11 @@ export class LLMExecutor {
 
     async generate(
         context: any,
-        onChunk?: (chunk: string) => Promise<void> | void
+        onChunk?: (chunk: string) => Promise<void> | void,
+        model?: string
     ): Promise<LLMResponse> {
         return withRetry(
-            async () => this.generateInternal(context, onChunk),
+            async () => this.generateInternal(context, onChunk, model),
             {
                 maxRetries: 3,
                 initialDelay: 1000,
@@ -44,7 +45,8 @@ export class LLMExecutor {
 
     private async generateInternal(
         context: any,
-        onChunk?: (chunk: string) => Promise<void> | void
+        onChunk?: (chunk: string) => Promise<void> | void,
+        model?: string
     ): Promise<LLMResponse> {
         try {
             // Month-3: Check LLM cache first
@@ -80,7 +82,7 @@ export class LLMExecutor {
             const llmStartTime = Date.now();
             let tokenCount = 0;
 
-            this.logger.info('Starting Re-Act loop');
+            this.logger.info('Starting Re-Act loop', { model: model || 'default' });
 
             // Re-Act loop for tool execution
             while (turnCount < this.MAX_TURNS) {
@@ -113,7 +115,8 @@ export class LLMExecutor {
 
                 const stream = llmManager.generate(promptString, {
                     stream: true,
-                    temperature: 0.7
+                    temperature: 0.7,
+                    model: model // Pass the model to use
                 });
 
                 let finalUsage;

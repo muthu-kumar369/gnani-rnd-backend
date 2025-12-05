@@ -52,6 +52,12 @@ router.get('/prompt-templates', conversationController.getPromptTemplates);
 // Update system prompt
 router.patch('/:id/system-prompt', validate(updateSystemPromptSchema), conversationController.updateSystemPrompt);
 
+// Update template
+router.patch('/:id/template', conversationController.updateTemplate);
+
+// Update model
+router.patch('/:id/model', conversationController.updateModel);
+
 // Export conversation
 router.get('/:sessionId/export/markdown', conversationController.exportMarkdown);
 router.get('/:sessionId/export/json', conversationController.exportJson);

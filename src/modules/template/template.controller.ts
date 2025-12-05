@@ -35,12 +35,25 @@ export class TemplateController {
             if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
             const { id } = req.params;
+
+            console.log('[TemplateController] Update request:', {
+                templateId: id,
+                userId: userId,
+                body: req.body
+            });
+
+            // Check if template exists first
+            const existingTemplate = await templateService.findById(id, userId);
+            console.log('[TemplateController] Existing template:', existingTemplate);
+
             const template = await templateService.update(id, userId, req.body);
-            
+
             if (!template) {
+                console.log('[TemplateController] Update failed - template not found or unauthorized');
                 return res.status(404).json({ error: 'Template not found or unauthorized' });
             }
 
+            console.log('[TemplateController] Template updated successfully:', template);
             res.json(template);
         } catch (error) {
             console.error('Error updating template:', error);

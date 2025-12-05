@@ -204,6 +204,28 @@ class ConversationService {
     }
 
     /**
+     * Update conversation template
+     */
+    async updateConversationTemplate(sessionId: string, userId: string, templateId: string) {
+        return Conversation.findOneAndUpdate(
+            { sessionId, userId, isDeleted: false },
+            { currentTemplate: templateId },
+            { new: true }
+        );
+    }
+
+    /**
+     * Update conversation model
+     */
+    async updateConversationModel(sessionId: string, userId: string, modelId: string) {
+        return Conversation.findOneAndUpdate(
+            { sessionId, userId, isDeleted: false },
+            { currentModel: modelId },
+            { new: true }
+        );
+    }
+
+    /**
      * Generate conversation title based on first 2-3 messages
      * @param sessionId - Session ID of the conversation
      * @param userId - User ID
@@ -317,7 +339,7 @@ class ConversationService {
         // Generate new response via SessionCoordinator
         // This ensures consistent RAG, Tool Execution, and Context management
         await this._ensureCoordinatorSession(sessionId, userId);
-        
+
         // We pass the parent message content as if it were a new input, 
         // but the coordinator handles it as a "text input" event.
         // Note: Ideally, we should have a specific "regenerate" method in coordinator,
@@ -331,17 +353,17 @@ class ConversationService {
             .lean();
 
         if (!newMessage) {
-             throw new Error('Failed to generate new response');
+            throw new Error('Failed to generate new response');
         }
 
         // Update parent's children if not already linked (coordinator might handle this differently, 
         // but let's ensure linkage)
         if (!parentMessage.children?.includes(newMessage._id.toString())) {
-             parentMessage.children = parentMessage.children || [];
-             parentMessage.children.push(newMessage._id.toString());
-             await parentMessage.save();
+            parentMessage.children = parentMessage.children || [];
+            parentMessage.children.push(newMessage._id.toString());
+            await parentMessage.save();
         }
-        
+
         // Update metadata to link to original message
         await ConversationMessage.findByIdAndUpdate(newMessage._id, {
             $set: {
@@ -378,17 +400,17 @@ class ConversationService {
      */
     async sendMessage(sessionId: string, userId: string, content: string) {
         await this._ensureCoordinatorSession(sessionId, userId);
-        
+
         // Process via coordinator
         const result = await sessionCoordinator.processTextInput(sessionId, content);
-        
+
         // Fetch the newly created messages (User + Assistant)
         // We assume the last 2 messages are the ones we just created
         const messages = await ConversationMessage.find({ sessionId })
             .sort({ timestamp: -1 })
             .limit(2)
             .lean();
-            
+
         // Return them in chronological order (User, then Assistant)
         return messages.reverse();
     }

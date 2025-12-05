@@ -5,6 +5,7 @@ export interface GenerateOptions {
     maxTokens?: number;
     stopSequences?: string[];
     stream?: boolean;
+    model?: string; // Model to use for generation
 }
 
 export interface LLMResponse {

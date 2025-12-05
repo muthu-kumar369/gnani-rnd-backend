@@ -5,6 +5,8 @@ export interface IConversation extends Document {
     sessionId: string;
     title: string;
     systemPrompt: string;
+    currentTemplate?: string;  // Template ID currently applied to this conversation
+    currentModel?: string;     // Model ID currently selected for this conversation
     isDeleted: boolean;
     metadata: Record<string, any>;
     createdAt: Date;
@@ -31,6 +33,15 @@ const conversationSchema = new Schema({
     systemPrompt: {
         type: String,
         default: 'You are Gnani, a helpful AI assistant.'
+    },
+    currentTemplate: {
+        type: String,
+        required: false
+    },
+    currentModel: {
+        type: String,
+        required: false,
+        default: 'gemma:2b'  // Default to gemma:2b for low RAM usage
     },
     isDeleted: {
         type: Boolean,

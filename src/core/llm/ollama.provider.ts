@@ -23,13 +23,20 @@ export class OllamaProvider implements LLMProvider {
 
     async *generate(prompt: string, options?: GenerateOptions): AsyncIterableIterator<LLMResponse> {
         try {
-            logger.info(`Ollama Request: URL=${this.baseUrl}/api/generate, Model=${this.model}`);
+            // Use model from options if provided, otherwise use default
+            const modelToUse = options?.model || this.model;
+
+            // TEMPORARY: Force gemma:2b until other models are available
+            // TODO: Remove this override when multiple models are deployed
+            const actualModel = 'gemma:2b';
+
+            logger.info(`Ollama Request: URL=${this.baseUrl}/api/generate, Model=${actualModel} (requested: ${modelToUse})`);
             logger.info(`Ollama Prompt Preview: ${prompt.substring(0, 100)}...`);
 
             const response = await axios.post(
                 `${this.baseUrl}/api/generate`,
                 {
-                    model: this.model,
+                    model: actualModel,  // Always use gemma:2b for now
                     prompt,
                     stream: options?.stream !== false,
                     options: {
@@ -87,7 +94,7 @@ export class OllamaProvider implements LLMProvider {
                 status: error.response?.status,
                 statusText: error.response?.statusText,
                 url: `${this.baseUrl}/api/generate`,
-                model: this.model
+                model: 'gemma:2b'
             });
             throw new Error(`Ollama generation failed: ${error.message}`);
         }
