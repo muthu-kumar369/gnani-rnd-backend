@@ -23,6 +23,7 @@ router.post('/', authMiddleware, async (req: CustomRequest, res) => {
         userId,
         async () => { }, // No-op for transcription callback
         async () => { }, // No-op for LLM chunk (we'll return full response)
+        async () => { }, // No-op for LLM complete
         async () => { }, // No-op for tool status
         sessionId // Pass existing sessionId if available
     );

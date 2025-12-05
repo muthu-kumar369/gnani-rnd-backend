@@ -37,6 +37,7 @@ message SendAudioStreamResponse {
     TitleUpdate title_update = 6;
     TypingStatus typing_status = 7;
   }
+  string segment_id = 8;
 }
 
 message ToolStatus {

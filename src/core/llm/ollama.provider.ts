@@ -44,27 +44,42 @@ export class OllamaProvider implements LLMProvider {
                 }
             );
 
+            let buffer = '';
+
             for await (const chunk of response.data) {
-                const data = JSON.parse(chunk.toString());
+                buffer += chunk.toString();
+                const lines = buffer.split('\n');
+                // Keep the last line in the buffer as it might be incomplete
+                buffer = lines.pop() || '';
 
-                const responseObj: LLMResponse = {
-                    text: data.response || '',
-                    finishReason: data.done ? 'stop' : 'length' // Simplified
-                };
+                for (const line of lines) {
+                    if (!line.trim()) continue;
 
-                if (data.done && data.prompt_eval_count && data.eval_count) {
-                    responseObj.usage = {
-                        promptTokens: data.prompt_eval_count,
-                        completionTokens: data.eval_count,
-                        totalTokens: data.prompt_eval_count + data.eval_count
-                    };
+                    try {
+                        const data = JSON.parse(line);
+
+                        const responseObj: LLMResponse = {
+                            text: data.response || '',
+                            finishReason: data.done ? 'stop' : 'length'
+                        };
+
+                        if (data.done && data.prompt_eval_count && data.eval_count) {
+                            responseObj.usage = {
+                                promptTokens: data.prompt_eval_count,
+                                completionTokens: data.eval_count,
+                                totalTokens: data.prompt_eval_count + data.eval_count
+                            };
+                        }
+
+                        if (data.response || data.done) {
+                            yield responseObj;
+                        }
+
+                        if (data.done) return;
+                    } catch (parseError: any) {
+                        logger.warn('Failed to parse Ollama chunk line', { line, error: parseError.message });
+                    }
                 }
-
-                if (data.response || data.done) {
-                    yield responseObj;
-                }
-
-                if (data.done) break;
             }
         } catch (error: any) {
             logger.error('Ollama generation failed', {

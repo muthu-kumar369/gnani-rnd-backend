@@ -190,19 +190,18 @@ export class AudioProcessor {
                     this.logger.info('Received final transcription from finishStream', {
                         sessionId,
                         transcript: transcript.substring(0, 100),
-                        isFinal
+                        isFinal: true  // Force true since finishStream is only called on end_of_stream
                     });
 
                     // Await the callback to ensure downstream processing (LLM, etc.) completes
                     // before we resolve the finishStream promise.
                     if (onTranscript) {
-                        await onTranscript(transcript, isFinal);
+                        await onTranscript(transcript, true);  // Force isFinal=true to trigger LLM
                     }
 
-                    if (isFinal) {
-                        clearTimeout(timeoutId);
-                        safeResolve();
-                    }
+                    // Always resolve since we forced isFinal=true
+                    clearTimeout(timeoutId);
+                    safeResolve();
                 },
                 true // isLastChunk = true
             );

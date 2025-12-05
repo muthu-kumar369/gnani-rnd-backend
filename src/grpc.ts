@@ -1,5 +1,6 @@
 // backend/src/server/grpc_server.ts
 import * as grpc from "@grpc/grpc-js";
+import { v4 as uuidv4 } from 'uuid';
 import * as protoLoader from "@grpc/proto-loader";
 import { GRPC_PORT } from "./config/env.config.js";
 import logger from "./core/logger/logger.js";
@@ -46,6 +47,7 @@ const StartSession = async (
       user_id,
       onTranscriptionCallback,
       undefined, // onLlmChunkCallback not used for StartSession
+      undefined, // onLlmCompleteCallback
       undefined, // onToolStatusCallback
       session_id // Pass existing session ID if provided
     );
@@ -107,7 +109,8 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
           let ok = true;
           if (isFinal) {
             ok = grpcCall.write({
-              final_text: transcript
+              final_text: transcript,
+              segment_id: uuidv4()
             });
           } else {
             ok = grpcCall.write({
@@ -170,6 +173,34 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
           }
         } else {
           logger.error(`[RESPONSE-FLOW-ERROR] grpcCall not available for session ${sessionId} in onLlmChunkCallback`);
+        }
+      };
+
+      session.onLlmCompleteCallback = async (text: string) => {
+        logger.info(`[TRACE] [RESPONSE-FLOW-COMPLETE] onLlmCompleteCallback triggered for session ${sessionId}`);
+        if (grpcCall) {
+          const payloadObj = {
+            type: 'complete_response',
+            text: text
+          };
+          const payload = JSON.stringify(payloadObj);
+
+          logger.info(`[RESPONSE-FLOW-COMPLETE] Sending complete_response to frontend`, {
+            sessionId,
+            payloadPreview: payload.substring(0, 50)
+          });
+
+          const ok = grpcCall.write({
+            llm_chunk: payload
+          });
+
+          if (!ok) {
+            logger.warn(`[TRACE] [RESPONSE-FLOW-WARN] gRPC buffer full for session ${sessionId} (LLM complete). Waiting for drain...`);
+            await waitForDrain(grpcCall);
+            logger.info(`[TRACE] [RESPONSE-FLOW-COMPLETE] gRPC buffer drained for session ${sessionId} (LLM complete).`);
+          }
+        } else {
+          logger.warn(`[TRACE] [RESPONSE-FLOW-ERROR] grpcCall not available for session ${sessionId} in onLlmCompleteCallback.`);
         }
       };
 
@@ -274,12 +305,12 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
         try {
           // Note: With new architecture, LLM responses stream via callbacks
           // We need to ensure the final audio chunk is processed and STT is finalized
+          // DON'T call call.end() here - keep stream open for LLM response
           await sessionCoordinator.finishAudioStream(currentSessionId);
         } catch (error: any) {
           logger.error(`Error in session ${currentSessionId}: ${error.message}`);
-        } finally {
-          call.end(); // End the bidirectional stream
         }
+        // Stream will be closed by client or when session ends
       }
     }
   });

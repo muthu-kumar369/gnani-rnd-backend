@@ -20,6 +20,7 @@ export interface Session {
     timeoutId: NodeJS.Timeout | null;
     onTranscriptionCallback: (transcript: string, isFinal: boolean) => Promise<void> | void;
     onLlmChunkCallback?: (text: string) => Promise<void> | void;
+    onLlmCompleteCallback?: (text: string) => Promise<void> | void;
     onToolStatusCallback?: (status: any) => Promise<void> | void;
     metadata: any;
 }
@@ -44,6 +45,7 @@ export class SessionCoordinator {
         userId: string,
         onTranscriptionCallback: (transcript: string, isFinal: boolean) => Promise<void> | void,
         onLlmChunkCallback?: (text: string) => Promise<void> | void,
+        onLlmCompleteCallback?: (text: string) => Promise<void> | void,
         onToolStatusCallback?: (status: any) => Promise<void> | void,
         existingSessionId?: string
     ): Promise<string> {
@@ -62,6 +64,7 @@ export class SessionCoordinator {
             timeoutId: null,
             onTranscriptionCallback,
             onLlmChunkCallback,
+            onLlmCompleteCallback,
             onToolStatusCallback,
             metadata: {}
         };
@@ -80,6 +83,23 @@ export class SessionCoordinator {
             });
         } catch (error: any) {
             this.logger.error(`Failed to persist session state to Redis: ${error.message}`);
+        }
+
+        // Ensure Conversation document exists in MongoDB to prevent 404s on frontend
+        try {
+            const conversationExists = await Conversation.exists({ sessionId });
+            if (!conversationExists) {
+                await Conversation.create({
+                    userId,
+                    sessionId,
+                    title: 'New Conversation',
+                    createdAt: new Date(),
+                    updatedAt: new Date()
+                });
+                this.logger.info(`Created new Conversation document for session ${sessionId}`);
+            }
+        } catch (error: any) {
+            this.logger.error(`Failed to create Conversation document: ${error.message}`);
         }
 
         this.resetSessionTimeout(sessionId);
@@ -327,6 +347,14 @@ export class SessionCoordinator {
                 });
             }
 
+            // Notify completion
+            if (session.onLlmCompleteCallback) {
+                this.logger.info(`[TRACE] [AUDIO-FLOW-20] Calling onLlmCompleteCallback for session ${sessionId}`);
+                await session.onLlmCompleteCallback(response.text);
+            } else {
+                this.logger.error(`[TRACE] [AUDIO-FLOW-ERROR] onLlmCompleteCallback NOT DEFINED for session ${sessionId}`);
+            }
+
             return { llmResponse: response.text };
 
         } catch (error: any) {
@@ -353,6 +381,14 @@ export class SessionCoordinator {
                 );
 
                 this.logger.info('Graceful degradation successful', { sessionId });
+
+                if (session.onLlmCompleteCallback) {
+                    this.logger.info(`[TRACE] [GRACEFUL-DEGRADATION] Calling onLlmCompleteCallback for session ${sessionId}`);
+                    await session.onLlmCompleteCallback(response.text);
+                } else {
+                    this.logger.error(`[TRACE] [GRACEFUL-DEGRADATION] onLlmCompleteCallback NOT DEFINED for session ${sessionId}`);
+                }
+
                 return { llmResponse: response.text };
 
             } catch (degradedError: any) {
@@ -374,6 +410,14 @@ export class SessionCoordinator {
                         });
                     }
                 }
+
+                if (session.onLlmCompleteCallback) {
+                    this.logger.info(`[TRACE] [FALLBACK-ERROR] Calling onLlmCompleteCallback for session ${sessionId}`);
+                    await session.onLlmCompleteCallback(fallbackMessage);
+                } else {
+                    this.logger.error(`[TRACE] [FALLBACK-ERROR] onLlmCompleteCallback NOT DEFINED for session ${sessionId}`);
+                }
+
                 return { llmResponse: fallbackMessage };
             }
         }
