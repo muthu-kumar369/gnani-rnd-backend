@@ -19,8 +19,9 @@ export class WhisperCppService {
 
     // Default paths (will be overridden if WSL is used)
     const homeDir = os.homedir();
-    this.whisperPath = path.join(homeDir, '.gnani', 'whisper-cpp', 'main');
-    this.modelPath = path.join(homeDir, '.gnani', 'whisper-cpp', 'models', 'ggml-base.en.bin');
+    // Updated paths for newly built whisper.cpp
+    this.whisperPath = path.join(homeDir, '.gnani', 'whisper.cpp', 'build', 'bin', 'whisper-cli');
+    this.modelPath = path.join(homeDir, '.gnani', 'whisper.cpp', 'models', 'ggml-base.en.bin');
 
     this.verifyInstallation();
   }
@@ -46,9 +47,9 @@ export class WhisperCppService {
   private checkWslInstallation(): void {
     try {
       // Check if WSL is available and binary exists
-      // We check /root/.gnani/whisper-cpp/main as that's where it seems to be installed for root
-      const wslPath = '/root/.gnani/whisper-cpp/main';
-      const wslModelPath = '/root/.gnani/whisper-cpp/models/ggml-base.en.bin';
+      // Updated paths for newly built whisper.cpp
+      const wslPath = '/root/.gnani/whisper.cpp/build/bin/whisper-cli';
+      const wslModelPath = '/root/.gnani/whisper.cpp/models/ggml-base.en.bin';
 
       // Use wsl to check file existence
       const checkCmd = `wsl -d UbuntuDistro [ -f "${wslPath}" ] && [ -f "${wslModelPath}" ] && echo "FOUND"`;
@@ -77,12 +78,31 @@ export class WhisperCppService {
 
     const startTime = Date.now();
 
+    // Log buffer size to debug empty audio
+    this.logger.info('Whisper.cpp transcribe called', {
+      sessionId,
+      audioBufferSize: audioBuffer.length,
+      sampleRate
+    });
+
+    if (audioBuffer.length === 0) {
+      this.logger.warn('Empty audio buffer received for transcription', { sessionId });
+      return '';
+    }
+
     // Save audio to temp file (whisper.cpp requires file input)
     const tempFile = path.join(os.tmpdir(), `audio-${sessionId}-${Date.now()}.wav`);
 
     try {
       // Write WAV file with proper header
       this.writeWavFile(tempFile, audioBuffer, sampleRate);
+
+      this.logger.info('WAV file created for debugging', {
+        sessionId,
+        tempFile,
+        fileSize: audioBuffer.length,
+        wavFileExists: fs.existsSync(tempFile)
+      });
 
       const transcript = await this.runWhisper(tempFile);
 
@@ -108,27 +128,71 @@ export class WhisperCppService {
       throw error;
 
     } finally {
-      // Cleanup temp file
-      if (fs.existsSync(tempFile)) {
-        fs.unlinkSync(tempFile);
-      }
+      // Keep temp file for debugging - comment out deletion
+      // if (fs.existsSync(tempFile)) {
+      //   fs.unlinkSync(tempFile);
+      // }
+      this.logger.info('Temp file kept for debugging', { tempFile });
     }
   }
 
-  // Month-3: Add compatibility method for AudioProcessor
+  // Buffer management for streaming
+  private sessionBuffers: Map<string, Buffer[]> = new Map();
+
   async sendAudioChunk(
     sessionId: string,
     chunk: Buffer,
     callback: (transcript: string, isFinal: boolean) => void,
     isFinal: boolean = false
   ): Promise<void> {
-    // For now, Whisper.cpp service is designed for file-based transcription
-    // We'll accumulate chunks in the AudioProcessor buffer and transcribe only when needed
-    // This method is a placeholder to satisfy the interface
+    // Whisper.cpp is file-based, so we accumulate chunks and transcribe on final
 
-    if (isFinal) {
-      // If it's the final chunk, we could trigger transcription here
-      // But AudioProcessor calls transcribe() separately
+    // Skip partial chunks - only process final
+    if (!isFinal) {
+      // Accumulate the chunk for later transcription
+      if (!this.sessionBuffers.has(sessionId)) {
+        this.sessionBuffers.set(sessionId, []);
+      }
+      this.sessionBuffers.get(sessionId)!.push(chunk);
+      this.logger.debug(`Whisper.cpp: Accumulated chunk for session ${sessionId}, total chunks: ${this.sessionBuffers.get(sessionId)!.length}, chunk size: ${chunk.length}`);
+      return;
+    }
+
+    // Final chunk - transcribe accumulated buffer
+    this.logger.info(`Whisper.cpp: Final chunk received for session ${sessionId}`);
+    try {
+      const buffers = this.sessionBuffers.get(sessionId) || [];
+      this.logger.info(`Whisper.cpp: Accumulated ${buffers.length} buffers for session ${sessionId}`);
+
+      const combinedBuffer = Buffer.concat(buffers);
+      this.logger.info(`Whisper.cpp: Combined buffer size: ${combinedBuffer.length} bytes`);
+
+      // Clean up session buffer
+      this.sessionBuffers.delete(sessionId);
+
+      if (combinedBuffer.length === 0) {
+        this.logger.warn('Whisper.cpp: No audio data to transcribe', { sessionId });
+        callback('', true);
+        return;
+      }
+
+      // Transcribe using the file-based method
+      this.logger.info(`Whisper.cpp: Starting transcription for session ${sessionId}`);
+      const transcript = await this.transcribe(sessionId, combinedBuffer, 16000);
+      this.logger.info(`Whisper.cpp: Transcription complete for session ${sessionId}: "${transcript.substring(0, 50)}..."`);
+
+      // Call the callback with final transcript
+      callback(transcript, true);
+
+    } catch (error: any) {
+      this.logger.error('Whisper.cpp sendAudioChunk failed', {
+        sessionId,
+        error: error.message,
+        stack: error.stack
+      });
+      // Clean up on error
+      this.sessionBuffers.delete(sessionId);
+      callback('', true); // Return empty on error
     }
   }
 
@@ -179,20 +243,28 @@ export class WhisperCppService {
           this.whisperPath,
           '-m', this.modelPath,
           '-f', wslAudioFile,
-          '-nt', // No timestamps
           '-l', 'en', // English
           '-t', '4' // 4 threads
+          // Removed -nt flag so we get timestamps for parsing
         ];
       } else {
         cmd = this.whisperPath;
         args = [
           '-m', this.modelPath,
           '-f', audioFile,
-          '-nt', // No timestamps
           '-l', 'en', // English
           '-t', '4' // 4 threads
+          // Removed -nt flag so we get timestamps for parsing
         ];
       }
+
+      // Log the command being executed
+      this.logger.info('Executing whisper.cpp command', {
+        cmd,
+        args: args.join(' '),
+        audioFile,
+        useWsl: this.useWsl
+      });
 
       const whisper = spawn(cmd, args);
 
@@ -200,23 +272,50 @@ export class WhisperCppService {
       let error = '';
 
       whisper.stdout.on('data', (data) => {
-        output += data.toString();
+        const chunk = data.toString();
+        output += chunk;
+        this.logger.debug('Whisper.cpp stdout:', { chunk: chunk.substring(0, 200) });
       });
 
       whisper.stderr.on('data', (data) => {
-        error += data.toString();
+        const chunk = data.toString();
+        error += chunk;
+        this.logger.warn('Whisper.cpp stderr:', { chunk });
       });
 
       whisper.on('close', (code) => {
+        this.logger.info('Whisper.cpp process closed', {
+          code,
+          outputLength: output.length,
+          errorLength: error.length,
+          hasOutput: output.length > 0,
+          hasError: error.length > 0
+        });
+
         if (code === 0) {
           const transcript = this.parseOutput(output);
+          this.logger.info('Whisper.cpp transcription result', {
+            transcriptLength: transcript.length,
+            transcript: transcript.substring(0, 100)
+          });
           resolve(transcript);
         } else {
-          reject(new Error(`Whisper.cpp failed with code ${code}: ${error}`));
+          const errorMsg = `Whisper.cpp failed with code ${code}. Stderr: ${error || '(empty)'}. Stdout: ${output.substring(0, 500)}`;
+          this.logger.error('Whisper.cpp execution failed', {
+            code,
+            stderr: error,
+            stdout: output.substring(0, 500)
+          });
+          reject(new Error(errorMsg));
         }
       });
 
       whisper.on('error', (err) => {
+        this.logger.error('Failed to spawn whisper.cpp process', {
+          error: err.message,
+          cmd,
+          args
+        });
         reject(new Error(`Failed to spawn whisper.cpp: ${err.message}`));
       });
     });
@@ -226,18 +325,34 @@ export class WhisperCppService {
     // Whisper.cpp output format:
     // [00:00:00.000 --> 00:00:02.000]   Transcript text here
 
+    this.logger.debug('Parsing whisper.cpp output', {
+      outputLength: output.length,
+      firstLines: output.split('\n').slice(0, 10).join('\\n')
+    });
+
     const lines = output.split('\n');
     const transcriptLines: string[] = [];
 
     for (const line of lines) {
-      // Look for lines with timestamps
+      // Look for lines with timestamps - more flexible regex
       const match = line.match(/\[[\d:.]+\s*-->\s*[\d:.]+\]\s*(.+)/);
       if (match && match[1]) {
-        transcriptLines.push(match[1].trim());
+        const text = match[1].trim();
+        if (text.length > 0) {
+          transcriptLines.push(text);
+          this.logger.debug('Found transcript line', { text });
+        }
       }
     }
 
-    return transcriptLines.join(' ').trim();
+    const result = transcriptLines.join(' ').trim();
+    this.logger.info('Parsed transcript result', {
+      lineCount: transcriptLines.length,
+      resultLength: result.length,
+      result: result.substring(0, 200)
+    });
+
+    return result;
   }
 
   isReady(): boolean {
@@ -246,6 +361,7 @@ export class WhisperCppService {
 
   cleanup(sessionId: string): void {
     // Cleanup any session-specific resources
+    this.sessionBuffers.delete(sessionId);
     this.logger.debug(`Whisper.cpp cleaned up session: ${sessionId}`);
   }
 }

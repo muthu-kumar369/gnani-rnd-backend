@@ -92,22 +92,23 @@ def main():
             session_buffers[session_id] = np.concatenate((session_buffers[session_id], audio_np))
 
             # Logic:
-            # We only transcribe when we have a "significant" amount of audio or it's the LAST chunk.
-            # This prevents running the heavy model on every tiny 60ms chunk.
+            # Only transcribe when we receive the LAST chunk (final)
+            # This prevents partial transcripts and reduces processing overhead
             
             is_final = (chunk_type == 'LAST')
-            buffer_len = len(session_buffers[session_id])
             
-            # 16000 samples = 1 second. Transcribe every ~1 second of new audio or at end.
-            # (In a real streaming setup, we might use a rolling window, but this is a simple batch-like approach)
-            if buffer_len > 16000 or is_final:
+            # Only process final chunks
+            if is_final:
                 
                 # Run transcription
                 # fp16=False if CPU to avoid warnings/errors
                 result = model.transcribe(
                     session_buffers[session_id], 
                     language=args.language,
-                    fp16=(device == "cuda") 
+                    fp16=(device == "cuda"),
+                    condition_on_previous_text=False, # Prevent hallucination loops
+                    no_speech_threshold=0.6,
+                    logprob_threshold=-1.0 
                 )
                 
                 text = result['text'].strip()
@@ -118,7 +119,6 @@ def main():
                 print(f"{session_id}:{text}:{str(is_final).lower()}")
                 sys.stdout.flush()
 
-            if is_final:
                 # Clear buffer after final transcription
                 if session_id in session_buffers:
                     del session_buffers[session_id]

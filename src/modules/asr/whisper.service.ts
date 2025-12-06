@@ -47,7 +47,17 @@ class WhisperService {
         ];
 
         // We still want to log to file, but also listen to the stream
-        const stderrFd = fs.openSync(this.pythonStderrLogFile, 'a');
+        let stderrFd: number | null = fs.openSync(this.pythonStderrLogFile, 'a');
+        const closeFd = () => {
+            if (stderrFd !== null) {
+                try {
+                    fs.closeSync(stderrFd);
+                } catch (e) {
+                    // Ignore close errors
+                }
+                stderrFd = null;
+            }
+        };
 
         this.pythonProcess = spawn(pythonExecutable, args, {
             env: { ...process.env, 'VIRTUAL_ENV': path.join(process.cwd(), '.venv') },
@@ -73,17 +83,19 @@ class WhisperService {
 
                         this.logger.debug(`Transcribed Text for session ${sessionId}: '${transcript}' (isFinal: ${isFinal})`);
 
+                        // Skip partial transcripts - only process final ones
+                        if (!isFinal) {
+                            return; // Ignore partial transcripts
+                        }
+
                         if (!transcript.trim()) {
-                            if (!isFinal) return; // Skip empty partials
                             this.logger.warn(`Empty final transcription for session ${sessionId}.`);
                         }
 
                         const callback = this.transcriptionCallbacks.get(sessionId);
                         if (callback) {
                             callback(transcript, isFinal);
-                            if (isFinal) {
-                                metrics.incWhisperTranscription(sessionId, 'success');
-                            }
+                            metrics.incWhisperTranscription(sessionId, 'success');
                         }
                     } else if (message.startsWith('ERROR:')) {
                         this.logger.error(`Whisper process error: ${message}`);
@@ -102,7 +114,13 @@ class WhisperService {
                 this.pythonProcess.stderr.on('data', (data: Buffer) => {
                     const errorMsg = data.toString();
                     // Write to log file manually since we are piping
-                    fs.writeSync(stderrFd, data);
+                    if (stderrFd !== null) {
+                        try {
+                            fs.writeSync(stderrFd, data);
+                        } catch (e) {
+                            // Ignore write errors if fd is closed
+                        }
+                    }
 
                     this.logger.error(`Whisper stderr: ${errorMsg}`);
 
@@ -116,7 +134,7 @@ class WhisperService {
             this.pythonProcess.on('close', (code: number) => {
                 this.logger.warn(`Whisper Python process exited with code ${code}.`);
                 this.pythonProcess = null;
-                fs.closeSync(stderrFd);
+                closeFd();
 
                 if (this.restartCount < this.MAX_RESTARTS) {
                     this.restartCount++;
@@ -132,7 +150,7 @@ class WhisperService {
             this.pythonProcess.on('error', (err: Error) => {
                 this.logger.error(`Failed to start Whisper Python process: ${err.message}`);
                 this.pythonProcess = null;
-                fs.closeSync(stderrFd);
+                closeFd();
             });
         }
 

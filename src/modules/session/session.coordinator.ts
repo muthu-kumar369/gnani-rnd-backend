@@ -190,6 +190,16 @@ export class SessionCoordinator {
             return;
         }
 
+        // Filter out invalid transcripts (noise, non-speech sounds)
+        if (!this.isValidTranscript(transcript)) {
+            this.logger.info(`[AUDIO-FLOW-FILTER] Skipping invalid transcript`, {
+                sessionId,
+                transcript: transcript.substring(0, 100),
+                reason: 'Invalid/noise transcript detected'
+            });
+            return;
+        }
+
         // Notify frontend
         this.logger.info(`[AUDIO-FLOW-8] Calling onTranscriptionCallback for session ${sessionId}`);
         try {
@@ -245,7 +255,7 @@ export class SessionCoordinator {
             if (currentTemplateId) {
                 try {
                     const templateService = await import('../template/template.service.js');
-                    const template = await templateService.default.getById(currentTemplateId);
+                    const template = await templateService.templateService.findById(currentTemplateId, session.userId);
                     if (template?.systemPrompt) {
                         templateSystemPrompt = template.systemPrompt;
                         this.logger.info(`[TEMPLATE] Using template system prompt from: ${template.name}`);
@@ -530,6 +540,59 @@ export class SessionCoordinator {
 
     getBufferStats(sessionId: string): { size: number; chunks: number } {
         return this.audioProcessor.getBufferStats(sessionId);
+    }
+
+    /**
+     * Check if transcript is valid (not noise or non-speech sounds)
+     */
+    private isValidTranscript(transcript: string): boolean {
+        if (!transcript || transcript.trim().length === 0) {
+            return false;
+        }
+
+        const normalizedTranscript = transcript.toLowerCase().trim();
+
+        // Filter out common non-speech sounds and noise patterns
+        const invalidPatterns = [
+            // Parenthetical sounds
+            /\(clears throat\)/i,
+            /\(coughs\)/i,
+            /\(laughs\)/i,
+            /\(sighs\)/i,
+            /\(sneezes\)/i,
+            /\(yawns\)/i,
+            /\(breathing\)/i,
+            /\(inhales\)/i,
+            /\(exhales\)/i,
+
+            // Bracketed noise markers
+            /\[blank_audio\]/i,
+            /\[music\]/i,
+            /\[screaming\]/i,
+            /\[silence\]/i,
+            /\[noise\]/i,
+            /\[inaudible\]/i,
+            /\[background noise\]/i,
+
+            // Very short or repetitive patterns
+            /^[a-z]{1,2}$/i,  // Single or two letters
+            /^(uh+|um+|ah+|oh+|mm+|hmm+)$/i,  // Filler words only
+        ];
+
+        // Check if transcript matches any invalid pattern
+        for (const pattern of invalidPatterns) {
+            if (pattern.test(normalizedTranscript)) {
+                return false;
+            }
+        }
+
+        // Transcript must have at least one word (3+ characters)
+        const words = normalizedTranscript.split(/\s+/).filter(w => w.length >= 3);
+        if (words.length === 0) {
+            return false;
+        }
+
+        return true;
     }
 
     getActiveSessionCount(): number {

@@ -389,6 +389,7 @@ class ConversationService {
                 userId,
                 async (transcript, isFinal) => { /* no-op for REST */ },
                 async (text) => { /* no-op for REST */ },
+                async (text) => { /* no-op for REST */ },
                 async (status) => { /* no-op for REST */ },
                 sessionId
             );

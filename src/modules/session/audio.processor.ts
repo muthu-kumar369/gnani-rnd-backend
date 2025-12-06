@@ -53,6 +53,7 @@ export class AudioProcessor {
         sampleRate: number,
         onTranscript?: (transcript: string, isFinal: boolean) => void
     ): Promise<void> {
+        this.logger.info(`[LOOP_TRACE] appendChunk: sessionId=${sessionId}, size=${chunk.length}`);
         const session = this.sessions.get(sessionId);
         if (!session) {
             throw new Error(`Audio session ${sessionId} not found`);
@@ -67,65 +68,19 @@ export class AudioProcessor {
 
         // Check for overflow
         if (newSize > this.MAX_BUFFER_SIZE) {
-            this.logger.warn('Buffer overflow detected, processing accumulated audio before flushing', {
+            this.logger.warn('Buffer overflow detected, flushing', {
                 sessionId,
                 currentSize,
-                newSize,
-                maxSize: this.MAX_BUFFER_SIZE,
-                percentOver: Math.round(((newSize - this.MAX_BUFFER_SIZE) / this.MAX_BUFFER_SIZE) * 100)
+                newSize
             });
-
-            // NEW: Send accumulated audio to Whisper before flushing
-            const combinedBuffer = Buffer.concat(session.buffer);
-            if (onTranscript && combinedBuffer.length > 0) {
-                this.logger.info('Sending accumulated audio to Whisper before flush', {
-                    sessionId,
-                    bufferSize: combinedBuffer.length,
-                    chunks: session.buffer.length
-                });
-
-                // Send to Whisper with isLastChunk = true to force transcription
-                this.sttService.sendAudioChunk(
-                    sessionId,
-                    combinedBuffer,
-                    (transcript: string, isFinal: boolean) => {
-                        this.logger.info('Received transcription from overflow buffer', {
-                            sessionId,
-                            transcript: transcript.substring(0, 100),
-                            isFinal
-                        });
-                        onTranscript(transcript, isFinal);
-                    },
-                    true // isLastChunk = true
-                );
-
-                // Notify user about long audio processing
-                onTranscript('(Processing long audio segment...)', false);
-            }
-
-            // Flush buffer
             await this.flush(sessionId);
             metrics.incrementAudioBufferOverflow(sessionId);
         }
 
-        // Warning at 80% capacity
-        if (newSize > this.BUFFER_WARNING_SIZE && currentSize <= this.BUFFER_WARNING_SIZE) {
-            this.logger.warn('Audio buffer approaching limit', {
-                sessionId,
-                currentSize: newSize,
-                maxSize: this.MAX_BUFFER_SIZE,
-                percentFull: Math.round((newSize / this.MAX_BUFFER_SIZE) * 100)
-            });
-            metrics.incrementAudioBufferWarning(sessionId);
-        }
-
         session.buffer.push(chunk);
-
-        // Track buffer metrics
-        // Track buffer metrics
         metrics.setAudioBufferSize(sessionId, newSize);
 
-        // Send to Whisper for streaming transcription (using selected service)
+        // Send to Whisper for streaming transcription
         if (onTranscript) {
             this.sttService.sendAudioChunk(sessionId, chunk, (transcript: string, isFinal: boolean) => {
                 if (transcript !== 'ACK') {
@@ -139,30 +94,18 @@ export class AudioProcessor {
         const session = this.sessions.get(sessionId);
         if (!session || session.buffer.length === 0) return;
 
-        const combinedBuffer = Buffer.concat(session.buffer);
-
-        this.logger.debug('Audio buffer flushed', {
-            sessionId,
-            bufferSize: combinedBuffer.length,
-            chunks: session.buffer.length
-        });
-
-        // Clear buffer
         session.buffer = [];
         metrics.setAudioBufferSize(sessionId, 0);
     }
 
     async finishStream(sessionId: string, onTranscript: (transcript: string, isFinal: boolean) => void): Promise<void> {
+        this.logger.info(`[LOOP_TRACE] finishStream: sessionId=${sessionId}`);
         const session = this.sessions.get(sessionId);
         if (!session) return;
 
         this.logger.info('Finishing audio stream', { sessionId });
 
-        // Send empty buffer with isLastChunk = true to force transcription of accumulated audio
-        // We do NOT send session.buffer again to avoid duplication, as chunks were already sent in appendChunk
         const emptyBuffer = Buffer.alloc(0);
-
-        // Clear buffer immediately as we've sent the signal
         session.buffer = [];
         metrics.setAudioBufferSize(sessionId, 0);
 
@@ -175,13 +118,12 @@ export class AudioProcessor {
                 }
             };
 
-            // Timeout to prevent hanging if STT service fails to respond
             const timeoutId = setTimeout(() => {
                 if (!resolved) {
                     this.logger.warn('Timeout waiting for final transcription in finishStream', { sessionId });
                     safeResolve();
                 }
-            }, 5000); // 5 seconds timeout
+            }, 5000);
 
             this.sttService.sendAudioChunk(
                 sessionId,
@@ -190,20 +132,17 @@ export class AudioProcessor {
                     this.logger.info('Received final transcription from finishStream', {
                         sessionId,
                         transcript: transcript.substring(0, 100),
-                        isFinal: true  // Force true since finishStream is only called on end_of_stream
+                        isFinal: true
                     });
 
-                    // Await the callback to ensure downstream processing (LLM, etc.) completes
-                    // before we resolve the finishStream promise.
                     if (onTranscript) {
-                        await onTranscript(transcript, true);  // Force isFinal=true to trigger LLM
+                        await onTranscript(transcript, true);
                     }
 
-                    // Always resolve since we forced isFinal=true
                     clearTimeout(timeoutId);
                     safeResolve();
                 },
-                true // isLastChunk = true
+                true
             );
         });
     }
