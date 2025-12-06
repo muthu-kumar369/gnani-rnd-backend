@@ -12,12 +12,14 @@ service GnaniService {
 message StartSessionRequest {
   string user_id = 1;
   string session_id = 2;
+  string conversation_id = 3;  // Optional - reuse existing conversation
 }
 
 message StartSessionResponse {
   bool success = 1;
   string message = 2;
-  string session_id = 3;
+  string session_id = 3;        // gRPC session (temporary)
+  string conversation_id = 4;   // Conversation ID (permanent)
 }
 
 message SendAudioStreamRequest {

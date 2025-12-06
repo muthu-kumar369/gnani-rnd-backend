@@ -107,9 +107,12 @@ def main():
                     language=args.language,
                     fp16=(device == "cuda"),
                     condition_on_previous_text=False, # Prevent hallucination loops
-                    no_speech_threshold=0.6,
-                    logprob_threshold=-1.0 
+                    no_speech_threshold=0.95, 
+                    logprob_threshold=None
                 )
+                
+                print(f"ERROR:Transcription result: {result['text']} (no_speech_prob: {result.get('no_speech_prob', 'N/A')})", file=sys.stderr)
+                sys.stderr.flush()
                 
                 text = result['text'].strip()
                 

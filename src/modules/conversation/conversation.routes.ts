@@ -43,6 +43,15 @@ router.post('/:id/edit', validate(editMessageSchema), conversationController.edi
 // Delete message
 router.delete('/:id/messages/:messageId', conversationController.deleteMessage);
 
+// Get message generations
+router.get('/:id/messages/:messageId/generations', conversationController.getMessageGenerations);
+
+// Restore message (undo)
+router.post('/messages/:messageId/restore', conversationController.restoreMessage);
+
+// Cancel stream (stop generation)
+router.post('/:id/cancel-stream', conversationController.cancelStream);
+
 // Send message (Text Chat)
 router.post('/:id/messages', conversationController.sendMessage);
 

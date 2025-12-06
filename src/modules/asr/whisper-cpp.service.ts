@@ -128,11 +128,15 @@ export class WhisperCppService {
       throw error;
 
     } finally {
-      // Keep temp file for debugging - comment out deletion
-      // if (fs.existsSync(tempFile)) {
-      //   fs.unlinkSync(tempFile);
-      // }
-      this.logger.info('Temp file kept for debugging', { tempFile });
+      // Clean up temp file
+      if (fs.existsSync(tempFile)) {
+        try {
+          fs.unlinkSync(tempFile);
+          this.logger.debug('Temp WAV file deleted', { tempFile });
+        } catch (e) {
+          this.logger.warn('Failed to delete temp WAV file', { tempFile, error: e });
+        }
+      }
     }
   }
 
@@ -293,6 +297,11 @@ export class WhisperCppService {
         });
 
         if (code === 0) {
+          this.logger.info('Whisper.cpp raw output received', {
+            outputLength: output.length,
+            rawOutput: output.substring(0, 1000) // Log first 1000 chars
+          });
+
           const transcript = this.parseOutput(output);
           this.logger.info('Whisper.cpp transcription result', {
             transcriptLength: transcript.length,
@@ -335,7 +344,7 @@ export class WhisperCppService {
 
     for (const line of lines) {
       // Look for lines with timestamps - more flexible regex
-      const match = line.match(/\[[\d:.]+\s*->\s*[\d:.]+\]\s*(.+)/);
+      const match = line.match(/\[\s*[\d:.]+\s*-+>\s*[\d:.]+\s*\]\s*(.+)/);
       if (match && match[1]) {
         const text = match[1].trim();
         if (text.length > 0) {

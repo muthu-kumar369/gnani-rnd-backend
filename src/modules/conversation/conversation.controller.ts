@@ -139,17 +139,39 @@ class ConversationController {
             if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
             const { id } = req.params;
-            const { messageId, content } = req.body;
+            const { messageId, content, autoRegenerate = true } = req.body;
 
             if (!messageId || !content) return res.status(400).json({ error: 'Message ID and content are required' });
 
-            const result = await conversationService.editMessage(id, messageId, content, userId);
+            const result = await conversationService.editMessage(id, messageId, content, userId, autoRegenerate);
             res.json(result);
         } catch (error: any) {
             console.error('Error editing message:', error);
+
+            // Handle role validation errors
+            if (error.message.includes('Cannot edit assistant messages')) {
+                return res.status(400).json({ error: error.message });
+            }
+
             res.status(500).json({ error: error.message || 'Internal Server Error' });
         }
     }
+
+    async getMessageGenerations(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { id, messageId } = req.params;
+
+            const result = await conversationService.getMessageGenerations(id, messageId, userId);
+            res.json(result);
+        } catch (error: any) {
+            console.error('Error getting message generations:', error);
+            res.status(500).json({ error: error.message || 'Internal Server Error' });
+        }
+    }
+
     async deleteMessage(req: AuthenticatedRequest, res: Response) {
         try {
             const userId = req.user?.id;
@@ -163,6 +185,61 @@ class ConversationController {
             res.json(result);
         } catch (error: any) {
             console.error('Error deleting message:', error);
+
+            // Handle role validation errors
+            if (error.message.includes('Cannot delete assistant messages')) {
+                return res.status(400).json({ error: error.message });
+            }
+
+            res.status(500).json({ error: error.message || 'Internal Server Error' });
+        }
+    }
+
+    async restoreMessage(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { messageId } = req.params;
+            const { undoToken } = req.body;
+
+            if (!messageId || !undoToken) {
+                return res.status(400).json({ error: 'Message ID and undo token are required' });
+            }
+
+            const result = await conversationService.restoreMessage(messageId, undoToken, userId);
+            res.json(result);
+        } catch (error: any) {
+            console.error('Error restoring message:', error);
+
+            if (error.message.includes('expired') || error.message.includes('invalid')) {
+                return res.status(400).json({ error: error.message });
+            }
+
+            res.status(500).json({ error: error.message || 'Internal Server Error' });
+        }
+    }
+
+    async cancelStream(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { id } = req.params;
+            const { messageId } = req.body;
+
+            // Import sessionCoordinator
+            const { default: sessionCoordinator } = await import('../session/session.coordinator.js');
+
+            const cancelled = await sessionCoordinator.cancelStream(id, messageId);
+
+            if (cancelled) {
+                res.json({ success: true, message: 'Stream cancelled successfully' });
+            } else {
+                res.status(404).json({ error: 'Session not found or not streaming' });
+            }
+        } catch (error: any) {
+            console.error('Error cancelling stream:', error);
             res.status(500).json({ error: error.message || 'Internal Server Error' });
         }
     }

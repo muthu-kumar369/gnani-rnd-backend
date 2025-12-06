@@ -15,6 +15,7 @@ import ConversationMessage from '../memory/entities/conversation.entity.js';
 
 export interface Session {
     userId: string;
+    conversationId: string;  // Permanent conversation ID (for database)
     createdAt: number;
     lastActivity: number;
     timeoutId: NodeJS.Timeout | null;
@@ -47,9 +48,11 @@ export class SessionCoordinator {
         onLlmChunkCallback?: (text: string) => Promise<void> | void,
         onLlmCompleteCallback?: (text: string) => Promise<void> | void,
         onToolStatusCallback?: (status: any) => Promise<void> | void,
-        existingSessionId?: string
-    ): Promise<string> {
+        existingSessionId?: string,
+        conversationId?: string  // NEW: Accept existing conversationId
+    ): Promise<{ sessionId: string; conversationId: string }> {  // NEW: Return both IDs
         const sessionId = existingSessionId || uuidv4();
+        const convId = conversationId || uuidv4();  // NEW: Generate or reuse conversationId
 
         if (existingSessionId) {
             this.logger.info(`Resuming existing session ID: ${sessionId}`);
@@ -57,8 +60,15 @@ export class SessionCoordinator {
             this.logger.debug(`Generated new session ID: ${sessionId}`);
         }
 
+        if (conversationId) {
+            this.logger.info(`Using existing conversation ID: ${convId}`);
+        } else {
+            this.logger.debug(`Generated new conversation ID: ${convId}`);
+        }
+
         const session: Session = {
             userId,
+            conversationId: convId,  // NEW: Store conversationId
             createdAt: Date.now(),
             lastActivity: Date.now(),
             timeoutId: null,
@@ -78,6 +88,7 @@ export class SessionCoordinator {
         try {
             await sessionMemory.setSessionState(sessionId, {
                 userId,
+                conversationId: convId,  // NEW: Store conversationId in Redis
                 lastActivity: Date.now(),
                 isSpeaking: false
             });
@@ -87,27 +98,27 @@ export class SessionCoordinator {
 
         // Ensure Conversation document exists in MongoDB to prevent 404s on frontend
         try {
-            const conversationExists = await Conversation.exists({ sessionId });
+            const conversationExists = await Conversation.exists({ sessionId: convId });  // NEW: Use conversationId
             if (!conversationExists) {
                 await Conversation.create({
                     userId,
-                    sessionId,
+                    sessionId: convId,  // NEW: Use conversationId for database
                     title: 'New Conversation',
                     createdAt: new Date(),
                     updatedAt: new Date()
                 });
-                this.logger.info(`Created new Conversation document for session ${sessionId}`);
+                this.logger.info(`Created new Conversation document for conversationId ${convId}`);
             }
         } catch (error: any) {
             this.logger.error(`Failed to create Conversation document: ${error.message}`);
         }
 
         this.resetSessionTimeout(sessionId);
-        this.logger.info(`Session started: ${sessionId} for user ${userId}`);
+        this.logger.info(`Session started: ${sessionId}, conversationId: ${convId} for user ${userId}`);
         metrics.activeSessionsGauge.inc();
-        auditService.logEvent('SESSION_START', userId, sessionId, {}, 'success');
+        auditService.logEvent('SESSION_START', userId, sessionId, { conversationId: convId }, 'success');
 
-        return sessionId;
+        return { sessionId, conversationId: convId };  // NEW: Return both IDs
     }
 
     getSession(sessionId: string): Session | undefined {
@@ -115,6 +126,39 @@ export class SessionCoordinator {
         if (session) {
             this.resetSessionTimeout(sessionId);
         }
+        return session;
+    }
+
+    async recoverSession(sessionId: string): Promise<Session | null> {
+        // Check if session exists in Redis
+        const state = await sessionMemory.getSessionState(sessionId);
+        if (!state || !state.userId) {
+            return null;
+        }
+
+        this.logger.info(`Recovering session ${sessionId} from Redis state`);
+
+        // Reconstruct session object
+        const session: Session = {
+            userId: state.userId,
+            conversationId: state.conversationId || sessionId, // Use stored convId or fallback
+            createdAt: Date.now(), // Approximate
+            lastActivity: Date.now(),
+            timeoutId: null,
+            // Callbacks will be re-attached by the caller (gRPC handler)
+            onTranscriptionCallback: async () => { },
+            onLlmChunkCallback: async () => { },
+            onLlmCompleteCallback: async () => { },
+            onToolStatusCallback: async () => { },
+            metadata: state.metadata || {}
+        };
+
+        this.sessions.set(sessionId, session);
+
+        // Re-initialize components
+        await this.audioProcessor.initialize(sessionId);
+        this.resetSessionTimeout(sessionId);
+
         return session;
     }
 
@@ -227,7 +271,7 @@ export class SessionCoordinator {
         }
     }
 
-    private async handleFinalTranscript(sessionId: string, transcript: string): Promise<{ llmResponse: string } | void> {
+    private async handleFinalTranscript(sessionId: string, transcript: string, options?: { targetMessageId?: string }): Promise<{ llmResponse: string } | void> {
         this.logger.info(`[AUDIO-FLOW-11] handleFinalTranscript started`, {
             sessionId,
             transcript: transcript.substring(0, 100)
@@ -243,7 +287,7 @@ export class SessionCoordinator {
             this.logger.info(`[AUDIO-FLOW-12] Processing final transcript for session ${sessionId}: "${transcript.substring(0, 50)}..."`);
 
             // Step 1: Fetch conversation to get custom system prompt, current model, and current template
-            const conversation = await Conversation.findOne({ sessionId }).lean();
+            const conversation = await Conversation.findOne({ sessionId: session.conversationId }).lean();
             const customSystemPrompt = conversation?.systemPrompt;
             const currentModel = conversation?.currentModel || 'gemma:2b'; // Default to gemma:2b
             const currentTemplateId = conversation?.currentTemplate;
@@ -268,15 +312,33 @@ export class SessionCoordinator {
 
             // Save User Message to MongoDB
             try {
+                // FALLBACK SAFEGUARD: Ensure we have valid IDs
+                const convIdToSave = session.conversationId || sessionId;
+                const genIdToSave = uuidv4();
+
+                this.logger.info(`[persistence] Saving user message`, {
+                    userId: session.userId,
+                    sessionId: convIdToSave,
+                    originalSessionId: sessionId,
+                    originalConversationId: session.conversationId
+                });
+
                 await ConversationMessage.create({
                     userId: session.userId,
-                    sessionId: sessionId,
+                    sessionId: convIdToSave, // Use fallback if needed
                     role: 'user',
                     content: transcript,
-                    timestamp: new Date()
+                    timestamp: new Date(),
+                    generationId: genIdToSave,
+                    status: 'completed',
+                    version: 1
                 });
             } catch (dbError: any) {
                 this.logger.error(`Failed to save user message: ${dbError.message}`);
+                try {
+                    const fs = await import('fs');
+                    fs.appendFileSync('db_persistence_errors.log', `${new Date().toISOString()} - User Message Error: ${dbError.message}\n`);
+                } catch (e) { /* ignore */ }
             }
 
             // Step 2: Build context (memory + RAG)
@@ -307,7 +369,7 @@ export class SessionCoordinator {
                 });
             }
 
-            // Step 2: Generate LLM response with Re-Act loop
+            // Step 3: Generate LLM response
             this.logger.info(`[AUDIO-FLOW-15] Calling LLMExecutor.generate for session ${sessionId}...`);
 
             // Emit typing status: generating
@@ -336,25 +398,58 @@ export class SessionCoordinator {
 
             // Save Assistant Message to MongoDB
             try {
-                await ConversationMessage.create({
+                // FALLBACK SAFEGUARD: Ensure we have valid IDs
+                const convIdToSave = session.conversationId || sessionId;
+                const genIdToSave = uuidv4();
+
+                this.logger.info(`[persistence] Saving assistant message`, {
                     userId: session.userId,
-                    sessionId: sessionId,
-                    role: 'assistant',
-                    content: response.text,
-                    timestamp: new Date(),
-                    tokenUsage: response.tokenUsage ? {
-                        inputTokens: response.tokenUsage.promptTokens,
-                        outputTokens: response.tokenUsage.completionTokens,
-                        totalTokens: response.tokenUsage.totalTokens,
-                        estimatedCost: 0, // TODO: Calculate cost if needed
-                        model: currentModel // Save the model used for this response
-                    } : undefined
+                    sessionId: convIdToSave,
+                    originalSessionId: sessionId,
+                    originalConversationId: session.conversationId
                 });
+
+                if (options?.targetMessageId) {
+                    this.logger.info(`[persistence] Updating existing assistant message: ${options.targetMessageId}`);
+                    await ConversationMessage.findByIdAndUpdate(options.targetMessageId, {
+                        content: response.text,
+                        status: 'completed',
+                        tokenUsage: response.tokenUsage ? {
+                            inputTokens: response.tokenUsage.promptTokens,
+                            outputTokens: response.tokenUsage.completionTokens,
+                            totalTokens: response.tokenUsage.totalTokens,
+                            estimatedCost: 0,
+                            model: currentModel
+                        } : undefined
+                    });
+                } else {
+                    await ConversationMessage.create({
+                        userId: session.userId,
+                        sessionId: convIdToSave, // Use fallback if needed
+                        role: 'assistant',
+                        content: response.text,
+                        timestamp: new Date(),
+                        generationId: genIdToSave,
+                        status: 'completed',
+                        version: 1,
+                        tokenUsage: response.tokenUsage ? {
+                            inputTokens: response.tokenUsage.promptTokens,
+                            outputTokens: response.tokenUsage.completionTokens,
+                            totalTokens: response.tokenUsage.totalTokens,
+                            estimatedCost: 0,
+                            model: currentModel
+                        } : undefined
+                    });
+                }
             } catch (dbError: any) {
                 this.logger.error(`Failed to save assistant message: ${dbError.message}`);
+                try {
+                    const fs = await import('fs');
+                    fs.appendFileSync('db_persistence_errors.log', `${new Date().toISOString()} - Assistant Message Error: ${dbError.message}\n`);
+                } catch (e) { /* ignore */ }
             }
 
-            // Step 3: Execute tools if needed
+            // Step 4: Execute tools if needed
             if (response.toolCalls && response.toolCalls.length > 0) {
                 this.logger.info(`[AUDIO-FLOW-17] Executing ${response.toolCalls.length} tool(s) for session ${sessionId}`);
                 await this.toolExecutor.executeTools(
@@ -456,7 +551,7 @@ export class SessionCoordinator {
         }
     }
 
-    async processTextInput(sessionId: string, textInput: string): Promise<any> {
+    async processTextInput(sessionId: string, textInput: string, options?: { targetMessageId?: string }): Promise<any> {
         this.logger.info(`Processing text input for session ${sessionId}: "${textInput.substring(0, 50)}..."`);
         const session = this.sessions.get(sessionId);
         if (!session) {
@@ -480,7 +575,7 @@ export class SessionCoordinator {
         }
 
         // Process as final transcript
-        return await this.handleFinalTranscript(sessionId, textInput);
+        return await this.handleFinalTranscript(sessionId, textInput, options);
     }
 
     async endSession(sessionId: string): Promise<boolean> {
@@ -503,7 +598,16 @@ export class SessionCoordinator {
             this.logger.error(`Failed to clear Redis session cache: ${err.message}`)
         );
 
-        // NEW: Trigger summarization on session end
+        // Terminate gRPC call if active
+        if (session.metadata?.grpcCall) {
+            try {
+                session.metadata.grpcCall.end();
+            } catch (e) {
+                this.logger.warn(`Failed to end gRPC call: ${e}`);
+            }
+        }
+
+        // Trigger summarization (async)
         try {
             const memoryManager = await import('../memory/memory.manager.js');
             await memoryManager.default.checkAndTriggerSummarization((session as any).userId);
@@ -586,9 +690,8 @@ export class SessionCoordinator {
             }
         }
 
-        // Transcript must have at least one word (3+ characters)
-        const words = normalizedTranscript.split(/\s+/).filter(w => w.length >= 3);
-        if (words.length === 0) {
+        // Transcript must have at least one character after trimming
+        if (normalizedTranscript.length === 0) {
             return false;
         }
 

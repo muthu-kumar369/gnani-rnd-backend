@@ -35,7 +35,7 @@ const StartSession = async (
 
   logger.debug('StartSession received call.request:', call.request);
   logger.debug('StartSession received call.metadata:', call.metadata);
-  const { user_id, session_id } = call.request;
+  const { user_id, session_id, conversation_id } = call.request;
   try {
     const onTranscriptionCallback = (transcript: string, isFinal: boolean) => {
       logger.debug(
@@ -43,23 +43,29 @@ const StartSession = async (
       );
     };
 
-    const newSessionId = await sessionCoordinator.startSession(
+    const result = await sessionCoordinator.startSession(
       user_id,
       onTranscriptionCallback,
       undefined, // onLlmChunkCallback not used for StartSession
       undefined, // onLlmCompleteCallback
       undefined, // onToolStatusCallback
-      session_id // Pass existing session ID if provided
+      session_id, // Pass existing session ID if provided
+      conversation_id // Pass existing conversation ID if provided
     );
-    logger.debug(`Generated newSessionId: ${newSessionId}`);
+
+    const newSessionId = typeof result === 'string' ? result : result.sessionId;
+    const newConversationId = typeof result === 'string' ? result : result.conversationId;
+
+    logger.debug(`Generated newSessionId: ${newSessionId}, conversationId: ${newConversationId}`);
     logger.info(
-      `gRPC StartSession successful. New session ID: ${newSessionId} for user: ${user_id}`
+      `gRPC StartSession successful. Session ID: ${newSessionId}, Conversation ID: ${newConversationId} for user: ${user_id}`
     );
 
     const responseToSend = {
       success: true,
       message: "Session started",
       session_id: newSessionId,
+      conversation_id: newConversationId,
     };
     logger.debug(
       `StartSession response to send: ${JSON.stringify(responseToSend)}`
@@ -96,6 +102,7 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
 
     const session = sessionCoordinator.getSession(sessionId);
     if (session) {
+      logger.info(`Session callbacks attached via setCallForSession for ${sessionId}`);
       session.metadata.grpcCall = grpcCall;
       session.onTranscriptionCallback = async (
         transcript: string,
@@ -222,32 +229,39 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
       };
     }
   };
-
   call.on("data", async (chunk: any) => {
+    // Session Recovery & Initialization
     if (!currentSessionId) {
       currentSessionId = chunk.session_id;
       if (currentSessionId) {
-        const session = sessionCoordinator.getSession(currentSessionId);
+        let session: any = sessionCoordinator.getSession(currentSessionId);
         if (!session) {
-          logger.warn(
-            `Received audio chunk for unknown session: ${currentSessionId}. Ending stream.`
-          );
-          call.end(); // End the stream if session is unknown
+          session = await sessionCoordinator.recoverSession(currentSessionId);
+        }
+
+        if (!session) {
+          logger.warn(`Received audio chunk for unknown session: ${currentSessionId}. Ending stream.`);
+          call.end();
           return;
         }
-        logger.info(
-          `gRPC SendAudioStream started for session: ${currentSessionId}`
-        );
-        setCallForSession(currentSessionId, call); // Store the call object for this session
+        logger.info(`gRPC SendAudioStream started for session: ${currentSessionId}`);
+        setCallForSession(currentSessionId, call);
       }
     }
 
+    // Session Verification per chunk
     if (currentSessionId) {
-      const session = sessionCoordinator.getSession(currentSessionId);
+      let session: any = sessionCoordinator.getSession(currentSessionId);
       if (!session) {
-        logger.warn(
-          `Session ${currentSessionId} not found during SendAudioStream. Ending stream.`
-        );
+        session = await sessionCoordinator.recoverSession(currentSessionId);
+        if (session) {
+          logger.info(`Session recovered during stream processing: ${currentSessionId}`);
+          setCallForSession(currentSessionId, call);
+        }
+      }
+
+      if (!session) {
+        logger.warn(`Session ${currentSessionId} not found during SendAudioStream. Ending stream.`);
         call.end();
         return;
       }

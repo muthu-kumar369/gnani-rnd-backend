@@ -5,6 +5,7 @@ import { Logger } from 'winston';
 
 interface SessionState {
     userId: string;
+    conversationId?: string;
     lastIntent?: string;
     lastAction?: any;
     isSpeaking?: boolean;
@@ -33,7 +34,7 @@ class SessionMemoryService {
         try {
             const key = `session:${sessionId}:messages`;
             const value = JSON.stringify(messages);
-            
+
             await redisClient.setex(key, ttl || this.DEFAULT_TTL, value);
             this.logger.debug(`Cached ${messages.length} messages for session ${sessionId}`);
             return true;
@@ -50,13 +51,13 @@ class SessionMemoryService {
         try {
             const key = `session:${sessionId}:messages`;
             const value = await redisClient.get(key);
-            
+
             if (value) {
                 const messages = JSON.parse(value);
                 this.logger.debug(`Retrieved ${messages.length} cached messages for session ${sessionId}`);
                 return messages;
             }
-            
+
             return null;
         } catch (error: any) {
             this.logger.error(`Error getting cached messages: ${error.message}`);
@@ -78,7 +79,7 @@ class SessionMemoryService {
                 ...state,
                 lastActivity: Date.now()
             });
-            
+
             await redisClient.setex(key, ttl || this.DEFAULT_TTL, value);
             this.logger.debug(`Set session state for ${sessionId}`);
             return true;
@@ -95,13 +96,13 @@ class SessionMemoryService {
         try {
             const key = `session:${sessionId}:state`;
             const value = await redisClient.get(key);
-            
+
             if (value) {
                 const state = JSON.parse(value);
                 this.logger.debug(`Retrieved session state for ${sessionId}`);
                 return state;
             }
-            
+
             return null;
         } catch (error: any) {
             this.logger.error(`Error getting session state: ${error.message}`);
@@ -124,7 +125,7 @@ class SessionMemoryService {
                 ...updates,
                 lastActivity: Date.now()
             };
-            
+
             return await this.setSessionState(sessionId, newState, ttl);
         } catch (error: any) {
             this.logger.error(`Error updating session state: ${error.message}`);
@@ -141,7 +142,7 @@ class SessionMemoryService {
                 `session:${sessionId}:messages`,
                 `session:${sessionId}:state`
             ];
-            
+
             await redisClient.del(...keys);
             this.logger.debug(`Cleared cache for session ${sessionId}`);
             return true;
@@ -163,7 +164,7 @@ class SessionMemoryService {
         try {
             const redisKey = `user:${userId}:${key}`;
             const value = JSON.stringify(data);
-            
+
             await redisClient.setex(redisKey, ttl || this.DEFAULT_TTL, value);
             this.logger.debug(`Cached user data: ${key} for user ${userId}`);
             return true;
@@ -180,11 +181,11 @@ class SessionMemoryService {
         try {
             const redisKey = `user:${userId}:${key}`;
             const value = await redisClient.get(redisKey);
-            
+
             if (value) {
                 return JSON.parse(value);
             }
-            
+
             return null;
         } catch (error: any) {
             this.logger.error(`Error getting cached user data: ${error.message}`);
@@ -202,7 +203,7 @@ class SessionMemoryService {
                 const match = key.match(/session:(.+):state/);
                 return match ? match[1] : null;
             }).filter(id => id !== null) as string[];
-            
+
             return sessionIds;
         } catch (error: any) {
             this.logger.error(`Error getting active sessions: ${error.message}`);

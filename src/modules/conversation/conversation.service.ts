@@ -323,60 +323,63 @@ class ConversationService {
     }
 
     /**
-     * Regenerate the last assistant response
+     * Regenerate response with proper generation tracking
      */
     async regenerateResponse(sessionId: string, messageId: string, userId: string) {
-        const message = await ConversationMessage.findOne({ _id: messageId, sessionId, userId });
+        const message = await ConversationMessage.findOne({
+            _id: messageId,
+            sessionId,
+            userId,
+            deletedAt: null
+        });
+
         if (!message || message.role !== 'assistant') {
             throw new Error('Message not found or not an assistant message');
         }
 
-        const parentMessage = await ConversationMessage.findOne({ _id: message.parentId, sessionId, userId });
+        // Find parent user message
+        const parentMessage = await ConversationMessage.findById(message.parentMessageId || message.parentId);
         if (!parentMessage) {
             throw new Error('Parent message not found');
         }
 
-        // Generate new response via SessionCoordinator
-        // This ensures consistent RAG, Tool Execution, and Context management
-        await this._ensureCoordinatorSession(sessionId, userId);
+        // Find max generation index for this parent
+        const existingGenerations = await ConversationMessage.find({
+            parentMessageId: parentMessage._id.toString(),
+            deletedAt: null
+        }).sort({ generationIndex: -1 }).limit(1);
 
-        // We pass the parent message content as if it were a new input, 
-        // but the coordinator handles it as a "text input" event.
-        // Note: Ideally, we should have a specific "regenerate" method in coordinator,
-        // but processTextInput is a reasonable proxy for now as it triggers the full pipeline.
-        const result = await sessionCoordinator.processTextInput(sessionId, parentMessage.content);
+        const nextGenerationIndex = existingGenerations.length > 0
+            ? existingGenerations[0].generationIndex + 1
+            : 0;
 
-        // The coordinator saves the message to DB, but we need to return it here.
-        // Since coordinator saves it, we fetch the latest assistant message.
-        const newMessage = await ConversationMessage.findOne({ sessionId, role: 'assistant' })
-            .sort({ timestamp: -1 })
-            .lean();
+        // Create new generation record
+        const streamId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const generationId = `gen_${parentMessage._id}_${nextGenerationIndex}`;
 
-        if (!newMessage) {
-            throw new Error('Failed to generate new response');
-        }
-
-        // Update parent's children if not already linked (coordinator might handle this differently, 
-        // but let's ensure linkage)
-        if (!parentMessage.children?.includes(newMessage._id.toString())) {
-            parentMessage.children = parentMessage.children || [];
-            parentMessage.children.push(newMessage._id.toString());
-            await parentMessage.save();
-        }
-
-        // Update metadata to link to original message
-        await ConversationMessage.findByIdAndUpdate(newMessage._id, {
-            $set: {
-                parentId: message.parentId,
-                branchIndex: (message.branchIndex || 0) + 1,
-                metadata: {
-                    ...newMessage.metadata,
-                    regeneratedFrom: messageId
-                }
+        const newGeneration = await ConversationMessage.create({
+            userId,
+            sessionId,
+            role: 'assistant',
+            content: '',
+            status: 'pending',
+            generationIndex: nextGenerationIndex,
+            generationId,
+            parentMessageId: parentMessage._id.toString(),
+            parentId: parentMessage._id.toString(),
+            metadata: {
+                regeneratedFrom: messageId
             }
         });
 
-        return newMessage;
+        // Trigger regeneration via SessionCoordinator
+        await this._ensureCoordinatorSession(sessionId, userId);
+        const result = await sessionCoordinator.processTextInput(sessionId, parentMessage.content);
+
+        // Fetch the updated message
+        const updatedGeneration = await ConversationMessage.findById(newGeneration._id);
+
+        return updatedGeneration;
     }
 
     /**
@@ -391,7 +394,8 @@ class ConversationService {
                 async (text) => { /* no-op for REST */ },
                 async (text) => { /* no-op for REST */ },
                 async (status) => { /* no-op for REST */ },
-                sessionId
+                sessionId,
+                sessionId // Pass sessionId as conversationId for REST operations to ensure persistence consistency
             );
         }
     }
@@ -417,97 +421,310 @@ class ConversationService {
     }
 
     /**
-     * Edit a user message and branch the conversation
+     * Edit message with auto-regeneration (ChatGPT/Gemini style)
+     * RESTRICTION: Only user messages can be edited
      */
-    async editMessage(sessionId: string, messageId: string, newContent: string, userId: string) {
-        const originalMessage = await ConversationMessage.findOne({ _id: messageId, sessionId, userId });
-        if (!originalMessage || originalMessage.role !== 'user') {
-            throw new Error('Message not found or not a user message');
-        }
-
-        // Create new user message as sibling
-        const newUserMessage = await ConversationMessage.create({
-            userId,
+    async editMessage(
+        sessionId: string,
+        messageId: string,
+        newContent: string,
+        userId: string,
+        autoRegenerate: boolean = true
+    ) {
+        const message = await ConversationMessage.findOne({
+            _id: messageId,
             sessionId,
-            role: 'user',
-            content: newContent,
-            parentId: originalMessage.parentId,
-            branchIndex: (originalMessage.branchIndex || 0) + 1,
-            metadata: {
-                ...originalMessage.metadata,
-                editedFrom: messageId
-            }
+            userId,
+            deletedAt: null
         });
 
-        if (originalMessage.parentId) {
-            const parent = await ConversationMessage.findById(originalMessage.parentId);
-            if (parent) {
-                parent.children = parent.children || [];
-                parent.children.push(newUserMessage._id.toString());
-                await parent.save();
-            }
+        if (!message) {
+            throw new Error('Message not found or already deleted');
         }
 
-        // Generate new assistant response via SessionCoordinator
-        await this._ensureCoordinatorSession(sessionId, userId);
-        const result = await sessionCoordinator.processTextInput(sessionId, newContent);
-
-        // Fetch the latest assistant message
-        const newAssistantMessage = await ConversationMessage.findOne({ sessionId, role: 'assistant' })
-            .sort({ timestamp: -1 })
-            .lean();
-
-        if (!newAssistantMessage) {
-            throw new Error('Failed to generate response for edited message');
+        // RESTRICTION: Only allow editing user messages
+        if (message.role !== 'user') {
+            throw new Error('Cannot edit assistant messages. Only user messages can be edited.');
         }
 
-        // Link assistant message to the new user message
-        // Note: Coordinator creates messages independently, so we need to fix the parentId
-        await ConversationMessage.findByIdAndUpdate(newAssistantMessage._id, {
-            parentId: newUserMessage._id.toString(),
-            branchIndex: 0
+        // Save to edit history
+        const editHistory = message.editHistory || [];
+        editHistory.push({
+            version: message.version,
+            content: message.content,
+            editedAt: new Date(),
+            editedBy: userId
         });
 
-        newUserMessage.children = [newAssistantMessage._id.toString()];
-        await newUserMessage.save();
+        // Update message content
+        const originalTimestamp = message.timestamp;
+        message.content = newContent;
+        message.version += 1;
+        message.editHistory = editHistory;
+        await message.save();
 
-        return { newUserMessage, newAssistantMessage };
+        // Find and soft delete old responses
+        const oldResponses = await ConversationMessage.find({
+            parentMessageId: messageId,
+            role: 'assistant',
+            deletedAt: null
+        });
+
+        const oldResponseIds = oldResponses.map(r => r._id.toString());
+
+        if (oldResponseIds.length > 0) {
+            await ConversationMessage.updateMany(
+                { _id: { $in: oldResponseIds } },
+                {
+                    $set: {
+                        deletedAt: new Date(),
+                        deletedBy: userId,
+                        deletionReason: 'User message edited'
+                    }
+                }
+            );
+        }
+
+        let newResponse: any = undefined;
+
+        // Auto-regenerate response (like ChatGPT/Gemini)
+        if (autoRegenerate) {
+            const streamId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            const generationId = `gen_${messageId}_0`;
+
+            // Create new response with status 'pending'
+            newResponse = await ConversationMessage.create({
+                userId,
+                sessionId,
+                role: 'assistant',
+                content: '',
+                status: 'pending',
+                generationIndex: 0,
+                generationId,
+                parentMessageId: messageId,
+                parentId: messageId,
+                timestamp: new Date(originalTimestamp.getTime() + 1),
+                metadata: {
+                    regeneratedAfterEdit: true,
+                    editedMessageVersion: message.version,
+                    model: 'gemma:2b' // Default
+                }
+            });
+
+            // Trigger regeneration via SessionCoordinator
+            await this._ensureCoordinatorSession(sessionId, userId);
+
+            // Pass the placeholder ID so coordinator updates it instead of creating a duplicate
+            await sessionCoordinator.processTextInput(sessionId, newContent, { targetMessageId: newResponse._id as string });
+
+            // Fetch updated response
+            newResponse = await ConversationMessage.findById(newResponse._id);
+        }
+
+        // Build message ordering sequence
+        const allMessages = await ConversationMessage.find({
+            sessionId,
+            deletedAt: null
+        }).sort({ timestamp: 1 });
+
+        const ordering = {
+            sequence: allMessages.map(m => m._id.toString())
+        };
+
+        return {
+            editedMessage: message,
+            oldResponses: {
+                action: 'soft_deleted',
+                count: oldResponseIds.length,
+                ids: oldResponseIds
+            },
+            newResponse,
+            ordering
+        };
     }
-    /**
-     * Delete a message and all its descendants
-     */
-    async deleteMessage(sessionId: string, messageId: string, userId: string) {
-        const message = await ConversationMessage.findOne({ _id: messageId, sessionId, userId });
+    async getMessageGenerations(sessionId: string, messageId: string, userId: string) {
+        const message = await ConversationMessage.findOne({
+            _id: messageId,
+            sessionId,
+            userId,
+            deletedAt: null
+        });
+
         if (!message) {
             throw new Error('Message not found');
         }
 
-        // 1. Find all descendants
-        const descendants: string[] = [];
-        const queue: string[] = [messageId];
+        // Get parent message ID (either this message or its parent)
+        const parentId = message.role === 'user' ? message._id.toString() : message.parentMessageId;
 
-        while (queue.length > 0) {
-            const currentId = queue.shift()!;
-            descendants.push(currentId);
+        if (!parentId) {
+            throw new Error('Cannot find parent message');
+        }
 
-            const currentMsg = await ConversationMessage.findById(currentId);
-            if (currentMsg && currentMsg.children && currentMsg.children.length > 0) {
-                queue.push(...currentMsg.children);
+        // Find all generations for this parent
+        const generations = await ConversationMessage.find({
+            parentMessageId: parentId,
+            role: 'assistant',
+            deletedAt: null
+        }).sort({ generationIndex: 1 }).lean();
+
+        return {
+            parentMessageId: parentId,
+            generations: generations.map(g => ({
+                id: g._id.toString(),
+                content: g.content,
+                generationIndex: g.generationIndex,
+                generationId: g.generationId,
+                timestamp: g.timestamp,
+                tokenUsage: g.tokenUsage
+            })),
+            totalGenerations: generations.length
+        };
+    }
+
+    /**
+     * Soft delete message and cascade to responses
+     * RESTRICTION: Only user messages can be deleted
+     */
+    async deleteMessage(
+        sessionId: string,
+        messageId: string,
+        userId: string
+    ): Promise<{
+        deletedCount: number;
+        cascadedResponses: number;
+        undoToken: string;
+        undoExpiresAt: Date;
+    }> {
+        const message = await ConversationMessage.findOne({
+            _id: messageId,
+            sessionId,
+            userId,
+            deletedAt: null
+        });
+
+        if (!message) {
+            throw new Error('Message not found or already deleted');
+        }
+
+        // RESTRICTION: Only allow deleting user messages
+        if (message.role !== 'user') {
+            throw new Error('Cannot delete assistant messages directly. Delete the parent user message to remove responses.');
+        }
+
+        // Find all assistant responses to this user message
+        const responses = await ConversationMessage.find({
+            parentMessageId: messageId,
+            role: 'assistant',
+            deletedAt: null
+        });
+
+        const responseIds = responses.map(r => r._id.toString());
+        const allIds = [messageId, ...responseIds];
+
+        // Cancel any active streams in the responses
+        for (const response of responses) {
+            if (response.streamState?.streamId && response.status === 'streaming') {
+                // Note: Stream cancellation will be handled by SessionCoordinator
+                this.logger.info(`Cancelling stream for response ${response._id}`);
             }
         }
 
-        // 2. Delete all descendants (including the message itself)
-        await ConversationMessage.deleteMany({ _id: { $in: descendants } });
+        // Soft delete user message + all responses
+        const deletedAt = new Date();
+        await ConversationMessage.updateMany(
+            { _id: { $in: allIds } },
+            {
+                $set: {
+                    deletedAt,
+                    deletedBy: userId,
+                    status: 'cancelled'
+                }
+            }
+        );
 
-        // 3. Update parent's children array
-        if (message.parentId) {
-            await ConversationMessage.updateOne(
-                { _id: message.parentId },
-                { $pull: { children: messageId } }
-            );
+        // Create undo token (stored in memory for now, could use Redis)
+        const undoToken = `undo_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const undoExpiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 min
+
+        // Store undo data in message metadata temporarily
+        // In production, this should use Redis
+        await ConversationMessage.findByIdAndUpdate(messageId, {
+            $set: {
+                'metadata.undoToken': undoToken,
+                'metadata.undoExpiresAt': undoExpiresAt
+            }
+        });
+
+        this.logger.info('Message deleted', {
+            messageId,
+            role: 'user',
+            cascadedResponses: responseIds.length,
+            undoToken
+        });
+
+        return {
+            deletedCount: allIds.length,
+            cascadedResponses: responseIds.length,
+            undoToken,
+            undoExpiresAt
+        };
+    }
+
+    /**
+     * Restore deleted message (undo)
+     */
+    async restoreMessage(
+        messageId: string,
+        undoToken: string,
+        userId: string
+    ): Promise<{ restoredCount: number }> {
+        // Verify undo token
+        const message = await ConversationMessage.findOne({
+            _id: messageId,
+            userId,
+            'metadata.undoToken': undoToken
+        });
+
+        if (!message) {
+            throw new Error('Undo token expired or invalid');
         }
 
-        return { deletedCount: descendants.length, deletedIds: descendants };
+        const undoExpiresAt = message.metadata?.undoExpiresAt;
+        if (!undoExpiresAt || new Date() > new Date(undoExpiresAt)) {
+            throw new Error('Undo window expired');
+        }
+
+        // Find all messages that were deleted together
+        const deletedAt = message.deletedAt;
+        const messagesToRestore = await ConversationMessage.find({
+            sessionId: message.sessionId,
+            deletedAt,
+            deletedBy: userId
+        });
+
+        const messageIds = messagesToRestore.map(m => m._id);
+
+        // Restore all messages
+        await ConversationMessage.updateMany(
+            { _id: { $in: messageIds } },
+            {
+                $unset: {
+                    deletedAt: '',
+                    deletedBy: ''
+                },
+                $set: {
+                    status: 'completed'
+                }
+            }
+        );
+
+        this.logger.info('Messages restored', {
+            messageId,
+            restoredCount: messageIds.length
+        });
+
+        return { restoredCount: messageIds.length };
     }
 }
 
