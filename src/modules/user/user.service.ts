@@ -52,13 +52,13 @@ export class UserService {
         if (profileData.profilePhoto) user.profile.profilePhoto = profileData.profilePhoto;
 
         await user.save();
-        
+
         // Invalidate related caches
         await cacheService.del([
             `api:${userId}::user:me`,
             `api:${userId}::user:profile`
         ]);
-        
+
         this.logger.info(`User profile updated for user: ${userId}`);
         auditService.logEvent('USER_PROFILE_UPDATE_SERVICE', userId, null, { action: 'updateUserProfile', updatedFields: Object.keys(profileData) }, 'success');
         return user;
@@ -98,29 +98,67 @@ export class UserService {
 
         // Safely merge settings
         if (settingsData.settings) {
-             // Use Mongoose's set() or direct assignment with Object.assign to ensure subdocument is updated correctly
-             // We convert existing settings to object to avoid Mongoose internal properties issues during merge
-             const currentSettings = user.settings ? JSON.parse(JSON.stringify(user.settings)) : {};
-             user.settings = { ...currentSettings, ...settingsData.settings };
-             user.markModified('settings');
+            // Use Mongoose's set() or direct assignment with Object.assign to ensure subdocument is updated correctly
+            // We convert existing settings to object to avoid Mongoose internal properties issues during merge
+            const currentSettings = user.settings ? JSON.parse(JSON.stringify(user.settings)) : {};
+            user.settings = { ...currentSettings, ...settingsData.settings };
+            user.markModified('settings');
         }
 
         if (settingsData.preferences) {
-             user.preferences = { ...user.preferences, ...settingsData.preferences };
-             user.markModified('preferences');
+            user.preferences = { ...user.preferences, ...settingsData.preferences };
+            user.markModified('preferences');
         }
 
         await user.save();
-        
+
         // Invalidate related caches
         await cacheService.del([
             `api:${userId}::user:me`,
             `api:${userId}::user:settings`
         ]);
-        
+
         this.logger.info(`User settings updated for user: ${userId}`);
         auditService.logEvent('USER_SETTINGS_UPDATE_SERVICE', userId, null, { action: 'updateUserSettings', updatedFields: Object.keys(settingsData) }, 'success');
         return user.settings;
+    }
+
+    async getUserPreferences(userId: string): Promise<any> {
+        const user = await User.findOne({ userId }).select('preferences');
+        if (!user) {
+            this.logger.warn(`User ${userId} not found when retrieving preferences.`);
+            auditService.logEvent('USER_PREFERENCES_RETRIEVAL_SERVICE', userId, null, { action: 'getUserPreferences', reason: 'User not found' }, 'failure');
+            throw new Error('User not found');
+        }
+        this.logger.info(`User preferences retrieved for user: ${userId}`);
+        auditService.logEvent('USER_PREFERENCES_RETRIEVAL_SERVICE', userId, null, { action: 'getUserPreferences' }, 'success');
+        return user.preferences || {};
+    }
+
+    async updateUserPreferences(userId: string, preferencesData: any): Promise<any> {
+        const user = await User.findOne({ userId });
+        if (!user) {
+            this.logger.warn(`User ${userId} not found when updating preferences.`);
+            auditService.logEvent('USER_PREFERENCES_UPDATE_SERVICE', userId, null, { action: 'updateUserPreferences', reason: 'User not found' }, 'failure');
+            throw new Error('User not found');
+        }
+
+        // Merge preferences (PATCH semantics - partial update)
+        user.preferences = { ...user.preferences, ...preferencesData };
+        user.markModified('preferences');
+
+        await user.save();
+
+        // Invalidate related caches
+        await cacheService.del([
+            `api:${userId}::user:me`,
+            `api:${userId}::user:settings`,
+            `api:${userId}::user:preferences`
+        ]);
+
+        this.logger.info(`User preferences updated for user: ${userId}`);
+        auditService.logEvent('USER_PREFERENCES_UPDATE_SERVICE', userId, null, { action: 'updateUserPreferences', updatedFields: Object.keys(preferencesData) }, 'success');
+        return user.preferences;
     }
 
     async getUserDevices(userId: string): Promise<IDevice[]> {
@@ -144,10 +182,10 @@ export class UserService {
         }
         user.devices.push(deviceData);
         await user.save();
-        
+
         // Invalidate devices cache
         await cacheService.del(`api:${userId}::user:devices`);
-        
+
         this.logger.info(`Device added for user: ${userId}`);
         auditService.logEvent('USER_DEVICE_ADD_SERVICE', userId, null, { action: 'addDevice', deviceName: deviceData.deviceName }, 'success');
         return user.devices;
@@ -170,10 +208,10 @@ export class UserService {
 
         user.devices[deviceIndex] = { ...(user.devices[deviceIndex].toObject()), ...updateData };
         await user.save();
-        
+
         // Invalidate devices cache
         await cacheService.del(`api:${userId}::user:devices`);
-        
+
         this.logger.info(`Device ${deviceId} updated for user: ${userId}`);
         auditService.logEvent('USER_DEVICE_UPDATE_SERVICE', userId, null, { action: 'updateDevice', deviceId, updatedFields: Object.keys(updateData) }, 'success');
         return user.devices;
@@ -189,10 +227,10 @@ export class UserService {
 
         user.devices = user.devices.filter((d: IDevice) => d.deviceId !== deviceId);
         await user.save();
-        
+
         // Invalidate devices cache
         await cacheService.del(`api:${userId}::user:devices`);
-        
+
         this.logger.info(`Device ${deviceId} removed for user: ${userId}`);
         auditService.logEvent('USER_DEVICE_REMOVE_SERVICE', userId, null, { action: 'removeDevice', deviceId }, 'success');
         return user.devices;
@@ -222,10 +260,10 @@ export class UserService {
         if (securityData.recoveryEmail) user.security.recoveryEmail = securityData.recoveryEmail;
 
         await user.save();
-        
+
         // Invalidate security cache
         await cacheService.del(`api:${userId}::user:security`);
-        
+
         this.logger.info(`User security info updated for user: ${userId}`);
         auditService.logEvent('USER_SECURITY_UPDATE_SERVICE', userId, null, { action: 'updateUserSecurity', updatedFields: Object.keys(securityData) }, 'success');
         return user.security;
@@ -253,10 +291,10 @@ export class UserService {
 
         user.oauthProviders = user.oauthProviders.filter(p => p.provider !== provider);
         await user.save();
-        
+
         // Invalidate OAuth cache
         await cacheService.del(`api:${userId}::user:oauth`);
-        
+
         this.logger.info(`OAuth provider ${provider} unlinked for user: ${userId}`);
         auditService.logEvent('USER_OAUTH_UNLINK_SERVICE', userId, null, { action: 'unlinkOAuthProvider', provider }, 'success');
         return user.oauthProviders;
@@ -284,10 +322,10 @@ export class UserService {
 
         user.history = user.history.filter((h: any) => h._id.toString() !== historyId);
         await user.save();
-        
+
         // Invalidate history cache
         await cacheService.del(`api:${userId}::user:history`);
-        
+
         this.logger.info(`History item ${historyId} deleted for user: ${userId}`);
         auditService.logEvent('USER_HISTORY_DELETE_ITEM_SERVICE', userId, null, { action: 'deleteUserHistoryItem', historyId }, 'success');
         return user.history;
@@ -303,10 +341,10 @@ export class UserService {
 
         user.history = [];
         await user.save();
-        
+
         // Invalidate history cache
         await cacheService.del(`api:${userId}::user:history`);
-        
+
         this.logger.info(`History cleared for user: ${userId}`);
         auditService.logEvent('USER_HISTORY_CLEAR_SERVICE', userId, null, { action: 'clearUserHistory' }, 'success');
     }
@@ -333,10 +371,10 @@ export class UserService {
 
         user.notes.push(note);
         await user.save();
-        
+
         // Invalidate notes cache
         await cacheService.del(`api:${userId}::user:notes`);
-        
+
         this.logger.info(`Note added for user: ${userId}`);
         auditService.logEvent('USER_NOTE_ADD_SERVICE', userId, null, { action: 'addUserNote' }, 'success');
         return user.notes;
@@ -353,10 +391,10 @@ export class UserService {
         if (index >= 0 && index < user.notes.length) {
             user.notes.splice(index, 1);
             await user.save();
-            
+
             // Invalidate notes cache
             await cacheService.del(`api:${userId}::user:notes`);
-            
+
             this.logger.info(`Note at index ${index} deleted for user: ${userId}`);
             auditService.logEvent('USER_NOTE_DELETE_SERVICE', userId, null, { action: 'deleteUserNote', index }, 'success');
         } else {

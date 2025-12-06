@@ -104,6 +104,39 @@ class UserController {
         }
     }
 
+    async getPreferences(req: CustomRequest, res: Response, next: NextFunction): Promise<void> {
+        const userId = req.fullUser?.userId;
+        try {
+            if (!userId) {
+                throw new Error('User ID not found in request');
+            }
+            const preferences = await this.userServiceInstance.getUserPreferences(userId);
+            auditService.logEvent('USER_PREFERENCES_RETRIEVAL', userId, null, { action: 'getPreferences' }, 'success');
+            res.status(200).json(preferences);
+        } catch (error: any) {
+            this.logger.error(`Get preferences error for user ${userId}: ${error.message}`);
+            auditService.logEvent('USER_PREFERENCES_RETRIEVAL', userId || null, null, { action: 'getPreferences', error: error.message }, 'failure');
+            next(error);
+        }
+    }
+
+    async updatePreferences(req: CustomRequest, res: Response, next: NextFunction): Promise<void> {
+        const userId = req.fullUser?.userId;
+        const preferencesData = req.body;
+        try {
+            if (!userId) {
+                throw new Error('User ID not found in request');
+            }
+            const updatedPreferences = await this.userServiceInstance.updateUserPreferences(userId, preferencesData);
+            auditService.logEvent('USER_PREFERENCES_UPDATE', userId, null, { action: 'updatePreferences', updatedFields: Object.keys(preferencesData) }, 'success');
+            res.status(200).json(updatedPreferences);
+        } catch (error: any) {
+            this.logger.error(`Update preferences error for user ${userId}: ${error.message}`);
+            auditService.logEvent('USER_PREFERENCES_UPDATE', userId || null, null, { action: 'updatePreferences', error: error.message }, 'failure');
+            next(error);
+        }
+    }
+
     async getDevices(req: CustomRequest, res: Response, next: NextFunction): Promise<void> {
         const userId = req.fullUser?.userId;
         try {

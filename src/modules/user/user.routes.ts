@@ -14,6 +14,8 @@ router.get('/profile', authMiddleware, cacheMiddleware({ ttl: 600 }), userContro
 router.put('/profile', authMiddleware, userController.updateProfile.bind(userController));
 router.get('/settings', authMiddleware, cacheMiddleware({ ttl: 600 }), userController.getSettings.bind(userController)); // 10 min
 router.put('/settings', authMiddleware, userController.updateSettings.bind(userController));
+router.get('/preferences', authMiddleware, cacheMiddleware({ ttl: 600 }), userController.getPreferences.bind(userController)); // 10 min
+router.patch('/preferences', authMiddleware, userController.updatePreferences.bind(userController));
 router.get('/devices', authMiddleware, cacheMiddleware({ ttl: 300 }), userController.getDevices.bind(userController)); // 5 min
 router.post('/devices', authMiddleware, userController.addDevice.bind(userController));
 router.put('/devices/:deviceId', authMiddleware, userController.updateDevice.bind(userController));

@@ -335,12 +335,18 @@ export class WhisperCppService {
 
     for (const line of lines) {
       // Look for lines with timestamps - more flexible regex
-      const match = line.match(/\[[\d:.]+\s*-->\s*[\d:.]+\]\s*(.+)/);
+      const match = line.match(/\[[\d:.]+\s*->\s*[\d:.]+\]\s*(.+)/);
       if (match && match[1]) {
         const text = match[1].trim();
         if (text.length > 0) {
-          transcriptLines.push(text);
-          this.logger.debug('Found transcript line', { text });
+          // Filter out non-speech sounds before adding to transcript
+          const filteredText = this.filterNonSpeechSounds(text);
+          if (filteredText.length > 0) {
+            transcriptLines.push(filteredText);
+            this.logger.debug('Found transcript line', { original: text, filtered: filteredText });
+          } else {
+            this.logger.debug('Filtered out non-speech line', { original: text });
+          }
         }
       }
     }
@@ -353,6 +359,47 @@ export class WhisperCppService {
     });
 
     return result;
+  }
+
+  private filterNonSpeechSounds(text: string): string {
+    // Remove non-speech sounds that Whisper transcribes in parentheses or brackets
+    // Examples: (keyboard clicking), (tape rewinding), (music playing), [applause], etc.
+
+    let filtered = text;
+
+    // Remove text in parentheses (common for non-speech sounds)
+    // Examples: (keyboard clicking), (coughing), (background noise)
+    filtered = filtered.replace(/\([^)]*\)/g, '');
+
+    // Remove text in square brackets (except timestamps which are already parsed out)
+    // Examples: [applause], [laughter], [music]
+    filtered = filtered.replace(/\[[^\]]*\]/g, '');
+
+    // Remove common non-speech markers that might not be in parentheses
+    const nonSpeechPatterns = [
+      /\binaudible\b/gi,
+      /\bsilence\b/gi,
+      /\bstatic\b/gi,
+      /\bnoise\b/gi,
+      /\bclicking\b/gi,
+      /\brewinding\b/gi,
+      /\bmusic\b/gi,
+      /\bapplause\b/gi,
+      /\blaughter\b/gi,
+      /\bcoughing\b/gi,
+      /\bclearing throat\b/gi,
+      /\bbackground\b/gi
+    ];
+
+    for (const pattern of nonSpeechPatterns) {
+      filtered = filtered.replace(pattern, '');
+    }
+
+    // Clean up extra whitespace and punctuation left behind
+    filtered = filtered.replace(/\s+/g, ' ').trim();
+    filtered = filtered.replace(/^[,.\s]+|[,.\s]+$/g, ''); // Remove leading/trailing punctuation
+
+    return filtered;
   }
 
   isReady(): boolean {
