@@ -183,17 +183,23 @@ const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
         }
       };
 
-      session.onLlmCompleteCallback = async (text: string) => {
+      session.onLlmCompleteCallback = async (text: string, messageId?: string) => {
         logger.info(`[TRACE] [RESPONSE-FLOW-COMPLETE] onLlmCompleteCallback triggered for session ${sessionId}`);
         if (grpcCall) {
-          const payloadObj = {
+          const payloadObj: any = {
             type: 'complete_response',
-            text: text
+            text: text,
           };
+
+          if (messageId) {
+            payloadObj.messageId = messageId;
+          }
+
           const payload = JSON.stringify(payloadObj);
 
           logger.info(`[RESPONSE-FLOW-COMPLETE] Sending complete_response to frontend`, {
             sessionId,
+            messageId,
             payloadPreview: payload.substring(0, 50)
           });
 

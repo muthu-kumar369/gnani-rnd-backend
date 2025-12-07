@@ -6,6 +6,7 @@ export interface GenerateOptions {
     stopSequences?: string[];
     stream?: boolean;
     model?: string; // Model to use for generation
+    signal?: AbortSignal;
 }
 
 export interface LLMResponse {

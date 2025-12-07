@@ -41,7 +41,7 @@ class ConversationService {
 
         // Fetch preview (last message) for each conversation
         const conversationsWithPreview = await Promise.all(conversations.map(async (conv) => {
-            const lastMessage = await ConversationMessage.findOne({ sessionId: conv.sessionId })
+            const lastMessage = await ConversationMessage.findOne({ conversationId: conv.conversationId })
                 .sort({ timestamp: -1 })
                 .select('content timestamp')
                 .lean();
@@ -66,14 +66,17 @@ class ConversationService {
     /**
      * Get full conversation details with messages
      */
-    async getConversation(sessionId: string, userId: string) {
-        const conversation = await Conversation.findOne({ sessionId, userId, isDeleted: false }).lean();
+    /**
+     * Get full conversation details with messages
+     */
+    async getConversation(conversationId: string, userId: string) {
+        const conversation = await Conversation.findOne({ conversationId, userId, isDeleted: false }).lean();
 
         if (!conversation) {
             return null;
         }
 
-        const messages = await ConversationMessage.find({ sessionId })
+        const messages = await ConversationMessage.find({ conversationId })
             .sort({ timestamp: 1 })
             .lean();
 
@@ -108,17 +111,17 @@ class ConversationService {
         const messageMatches = await ConversationMessage.find({
             userId,
             $text: { $search: query }
-        }).limit(limit * 2).select('sessionId content').lean();
+        }).limit(limit * 2).select('conversationId content').lean();
 
-        // Extract unique session IDs from message matches
-        const sessionIdsFromMessages = [...new Set(messageMatches.map(m => m.sessionId))];
+        // Extract unique conversation IDs from message matches
+        const conversationIdsFromMessages = [...new Set(messageMatches.map(m => m.conversationId))];
 
         // Fetch conversations for message matches (if not already found by title)
-        const titleMatchIds = new Set(titleMatches.map(c => c.sessionId));
-        const newSessionIds = sessionIdsFromMessages.filter(sid => !titleMatchIds.has(sid));
+        const titleMatchIds = new Set(titleMatches.map(c => c.conversationId));
+        const newConversationIds = conversationIdsFromMessages.filter(cid => !titleMatchIds.has(cid));
 
         const messageMatchConversations = await Conversation.find({
-            sessionId: { $in: newSessionIds },
+            conversationId: { $in: newConversationIds },
             userId,
             isDeleted: false
         }).limit(limit - titleMatches.length).lean();
@@ -127,11 +130,11 @@ class ConversationService {
 
         // Add snippets
         return allConversations.map(conv => {
-            const matchingMsg = messageMatches.find(m => m.sessionId === conv.sessionId);
+            const matchingMsg = messageMatches.find(m => m.conversationId === conv.conversationId);
             return {
                 ...conv,
                 id: conv._id,
-                matchType: titleMatchIds.has(conv.sessionId) ? 'title' : 'content',
+                matchType: titleMatchIds.has(conv.conversationId) ? 'title' : 'content',
                 snippet: matchingMsg ? matchingMsg.content.substring(0, 150) : ''
             };
         });
@@ -140,10 +143,13 @@ class ConversationService {
     /**
      * Soft delete conversation and cleanup associated files
      */
-    async deleteConversation(sessionId: string, userId: string) {
+    /**
+     * Soft delete conversation and cleanup associated files
+     */
+    async deleteConversation(conversationId: string, userId: string) {
         try {
             // Get all messages with attachments
-            const messages = await ConversationMessage.find({ sessionId, userId });
+            const messages = await ConversationMessage.find({ conversationId, userId });
 
             // Collect all file IDs from attachments
             const fileIds: string[] = [];
@@ -171,7 +177,7 @@ class ConversationService {
 
             // Soft delete conversation
             return Conversation.findOneAndUpdate(
-                { sessionId, userId },
+                { conversationId, userId },
                 { isDeleted: true },
                 { new: true }
             );
@@ -184,9 +190,9 @@ class ConversationService {
     /**
      * Update conversation title
      */
-    async updateTitle(sessionId: string, userId: string, title: string) {
+    async updateTitle(conversationId: string, userId: string, title: string) {
         return Conversation.findOneAndUpdate(
-            { sessionId, userId },
+            { conversationId, userId },
             { title },
             { new: true }
         );
@@ -195,9 +201,9 @@ class ConversationService {
     /**
      * Update conversation system prompt
      */
-    async updateSystemPrompt(sessionId: string, userId: string, systemPrompt: string) {
+    async updateSystemPrompt(conversationId: string, userId: string, systemPrompt: string) {
         return Conversation.findOneAndUpdate(
-            { sessionId, userId, isDeleted: false },
+            { conversationId, userId, isDeleted: false },
             { systemPrompt },
             { new: true }
         );
@@ -206,9 +212,9 @@ class ConversationService {
     /**
      * Update conversation template
      */
-    async updateConversationTemplate(sessionId: string, userId: string, templateId: string) {
+    async updateConversationTemplate(conversationId: string, userId: string, templateId: string) {
         return Conversation.findOneAndUpdate(
-            { sessionId, userId, isDeleted: false },
+            { conversationId, userId, isDeleted: false },
             { currentTemplate: templateId },
             { new: true }
         );
@@ -217,9 +223,9 @@ class ConversationService {
     /**
      * Update conversation model
      */
-    async updateConversationModel(sessionId: string, userId: string, modelId: string) {
+    async updateConversationModel(conversationId: string, userId: string, modelId: string) {
         return Conversation.findOneAndUpdate(
-            { sessionId, userId, isDeleted: false },
+            { conversationId, userId, isDeleted: false },
             { currentModel: modelId },
             { new: true }
         );
@@ -231,15 +237,24 @@ class ConversationService {
      * @param userId - User ID
      * @returns Promise<string> - Generated title
      */
-    async generateConversationTitle(sessionId: string, userId: string): Promise<string> {
+    /**
+     * Generate conversation title based on first 2-3 messages
+     * @param conversationId - Conversation ID
+     * @param userId - User ID
+     * @returns Promise<string> - Generated title
+     */
+    async generateConversationTitle(conversationId: string, userId: string): Promise<string> {
         try {
-            this.logger.info(`Generating title for conversation ${sessionId}`);
+            this.logger.info(`Generating title for conversation ${conversationId}`);
 
-            // Fetch first 3 messages from the conversation
-            const messages = await shortTermMemory.getSessionMessages(sessionId);
+            // Fetch first 3 messages from the database (more reliable than shortTermMemory which is ephemeral)
+            const messages = await ConversationMessage.find({ conversationId })
+                .sort({ timestamp: 1 })
+                .limit(3)
+                .lean();
 
             if (messages.length < 2) {
-                this.logger.warn(`Not enough messages to generate title for session ${sessionId}`);
+                this.logger.warn(`Not enough messages to generate title for session ${conversationId}`);
                 return 'New Conversation';
             }
 
@@ -260,31 +275,36 @@ class ConversationService {
             const generatedTitle = await llmService.generateTitle(conversationContext);
 
             // Update conversation with new title
-            await this.updateTitle(sessionId, userId, generatedTitle);
+            await this.updateTitle(conversationId, userId, generatedTitle);
 
-            // Emit gRPC event for title update
+            // Emit gRPC event for title update (if session is active)
             try {
+                // Note: We need to find the ACTIVE session ID for this conversationId to notify the client
+                // This might be tricky if conversationId != sessionId. 
+                // Ideally SessionCoordinator should support lookup by conversationId.
+                // For now, we accept that if IDs differ, real-time title update might not reach the client immediately
+                // unless we find the active session. This is an R&D trade-off.
                 const sessionCoordinator = (await import('../session/session.coordinator.js')).default;
-                const session = sessionCoordinator.getSession(sessionId);
+                const session = sessionCoordinator.getSession(conversationId); // Try using convId as sessionId (legacy/simple case)
                 if (session && session.metadata?.grpcCall) {
                     session.metadata.grpcCall.write({
                         title_update: {
-                            session_id: sessionId,
+                            session_id: conversationId,
                             title: generatedTitle
                         }
                     });
-                    this.logger.debug(`Emitted title update via gRPC for session ${sessionId}`);
+                    this.logger.debug(`Emitted title update via gRPC for session ${conversationId}`);
                 }
             } catch (emitError: any) {
                 this.logger.warn(`Failed to emit title update via gRPC: ${emitError.message}`);
             }
 
-            this.logger.info(`Successfully generated and updated title for session ${sessionId}: "${generatedTitle}"`);
+            this.logger.info(`Successfully generated and updated title for conversation ${conversationId}: "${generatedTitle}"`);
 
             return generatedTitle;
 
         } catch (error: any) {
-            this.logger.error(`Error generating conversation title for session ${sessionId}: ${error.message}`);
+            this.logger.error(`Error generating conversation title for session ${conversationId}: ${error.message}`);
             // Don't throw - just return fallback
             return 'New Conversation';
         }
@@ -293,12 +313,15 @@ class ConversationService {
     /**
      * Ensure conversation exists (create if not)
      */
-    async ensureConversation(sessionId: string, userId: string) {
-        const exists = await Conversation.exists({ sessionId });
+    /**
+     * Ensure conversation exists (create if not)
+     */
+    async ensureConversation(conversationId: string, userId: string) {
+        const exists = await Conversation.exists({ conversationId });
         if (!exists) {
             await Conversation.create({
                 userId,
-                sessionId,
+                conversationId,
                 title: 'New Conversation',
                 createdAt: new Date(),
                 updatedAt: new Date()
@@ -309,11 +332,14 @@ class ConversationService {
     /**
      * Create a new conversation explicitly
      */
+    /**
+     * Create a new conversation explicitly
+     */
     async createConversation(userId: string, systemPrompt?: string) {
-        const sessionId = `sess_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const conversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const conversation = await Conversation.create({
             userId,
-            sessionId,
+            conversationId,
             title: 'New Conversation',
             systemPrompt: systemPrompt || "You are Gnani, a helpful AI assistant.",
             createdAt: new Date(),
@@ -325,10 +351,13 @@ class ConversationService {
     /**
      * Regenerate response with proper generation tracking
      */
-    async regenerateResponse(sessionId: string, messageId: string, userId: string) {
+    /**
+     * Regenerate response with proper generation tracking
+     */
+    async regenerateResponse(conversationId: string, messageId: string, userId: string) {
         const message = await ConversationMessage.findOne({
             _id: messageId,
-            sessionId,
+            conversationId,
             userId,
             deletedAt: null
         });
@@ -338,9 +367,28 @@ class ConversationService {
         }
 
         // Find parent user message
-        const parentMessage = await ConversationMessage.findById(message.parentMessageId || message.parentId);
+        let parentMessage = await ConversationMessage.findById(message.parentMessageId || message.parentId);
+
+        // Fallback: If parent not found by ID, find the latest user message before this assistant message in the same conversation
         if (!parentMessage) {
-            throw new Error('Parent message not found');
+            console.warn(`[Regenerate] Parent message not found for ${messageId}, attempting temporal fallback...`);
+            parentMessage = await ConversationMessage.findOne({
+                conversationId,
+                role: 'user',
+                timestamp: { $lt: message.timestamp },
+                deletedAt: null
+            }).sort({ timestamp: -1 });
+
+            // If found via fallback, heal the link
+            if (parentMessage) {
+                console.info(`[Regenerate] Healed parent link for ${messageId} -> ${parentMessage._id}`);
+                message.parentMessageId = parentMessage._id.toString();
+                await message.save();
+            }
+        }
+
+        if (!parentMessage) {
+            throw new Error('Parent message not found (and fallback failed)');
         }
 
         // Find max generation index for this parent
@@ -359,9 +407,9 @@ class ConversationService {
 
         const newGeneration = await ConversationMessage.create({
             userId,
-            sessionId,
+            conversationId,
             role: 'assistant',
-            content: '',
+            content: ' ', // Initialize with a space to bypass "required" validation
             status: 'pending',
             generationIndex: nextGenerationIndex,
             generationId,
@@ -372,46 +420,56 @@ class ConversationService {
             }
         });
 
-        // Trigger regeneration via SessionCoordinator
-        await this._ensureCoordinatorSession(sessionId, userId);
-        const result = await sessionCoordinator.processTextInput(sessionId, parentMessage.content);
+        // Update parent's children array
+        await ConversationMessage.findByIdAndUpdate(parentMessage._id, {
+            $push: { children: newGeneration.id }
+        });
 
-        // Fetch the updated message
-        const updatedGeneration = await ConversationMessage.findById(newGeneration._id);
+        // Trigger regeneration via SessionCoordinator (Async)
+        // We do NOT await this. The response will be streamed via gRPC.
+        const ephemSessionId = await this._ensureCoordinatorSession(conversationId, userId);
+        sessionCoordinator.processTextInput(ephemSessionId, parentMessage.content, { targetMessageId: newGeneration._id.toString(), skipUserPersistence: true })
+            .catch(err => {
+                console.error(`Async regeneration failed for session ${ephemSessionId}:`, err);
+            });
 
-        return updatedGeneration;
+        // Return the pending message immediately
+        return newGeneration;
     }
 
     /**
      * Helper to ensure session exists in coordinator
      */
-    private async _ensureCoordinatorSession(sessionId: string, userId: string) {
-        if (!sessionCoordinator.getSession(sessionId)) {
-            // Start a session with dummy callbacks since we await the result directly
-            await sessionCoordinator.startSession(
-                userId,
-                async (transcript, isFinal) => { /* no-op for REST */ },
-                async (text) => { /* no-op for REST */ },
-                async (text) => { /* no-op for REST */ },
-                async (status) => { /* no-op for REST */ },
-                sessionId,
-                sessionId // Pass sessionId as conversationId for REST operations to ensure persistence consistency
-            );
-        }
+    private async _ensureCoordinatorSession(conversationId: string, userId: string): Promise<string> {
+        // Start a new ephemeral session bound to this conversation
+        // This ensures the coordinator can process the request
+        const { sessionId } = await sessionCoordinator.startSession(
+            userId,
+            async (transcript, isFinal) => { /* no-op for REST */ },
+            async (text) => { /* no-op for REST */ },
+            async (text) => { /* no-op for REST */ },
+            async (status) => { /* no-op for REST */ },
+            undefined, // Generate new ephemeral ID
+            conversationId // Bind to persistent conversation ID
+        );
+        return sessionId;
     }
+
+
 
     /**
      * Send a new message (REST API)
      */
-    async sendMessage(sessionId: string, userId: string, content: string) {
-        await this._ensureCoordinatorSession(sessionId, userId);
+    async sendMessage(conversationId: string, userId: string, content: string) {
+        const ephemSessionId = await this._ensureCoordinatorSession(conversationId, userId);
 
         // Process via coordinator
-        const result = await sessionCoordinator.processTextInput(sessionId, content);
+        // Note: this awaits the full generation including LLM response
+        await sessionCoordinator.processTextInput(ephemSessionId, content);
 
-        // Fetch the newly created messages (User + Assistant)
+        // Fetch the newly created messages (User + Assistant) for this conversation
         // We assume the last 2 messages are the ones we just created
-        const messages = await ConversationMessage.find({ sessionId })
+        const messages = await ConversationMessage.find({ conversationId })
             .sort({ timestamp: -1 })
             .limit(2)
             .lean();
@@ -425,7 +483,7 @@ class ConversationService {
      * RESTRICTION: Only user messages can be edited
      */
     async editMessage(
-        sessionId: string,
+        conversationId: string,
         messageId: string,
         newContent: string,
         userId: string,
@@ -433,7 +491,7 @@ class ConversationService {
     ) {
         const message = await ConversationMessage.findOne({
             _id: messageId,
-            sessionId,
+            conversationId,
             userId,
             deletedAt: null
         });
@@ -495,9 +553,9 @@ class ConversationService {
             // Create new response with status 'pending'
             newResponse = await ConversationMessage.create({
                 userId,
-                sessionId,
+                conversationId,
                 role: 'assistant',
-                content: '',
+                content: ' ', // Initialize with a space to bypass "required" validation
                 status: 'pending',
                 generationIndex: 0,
                 generationId,
@@ -511,19 +569,26 @@ class ConversationService {
                 }
             });
 
-            // Trigger regeneration via SessionCoordinator
-            await this._ensureCoordinatorSession(sessionId, userId);
+            // Update parent's (user message) children array
+            await ConversationMessage.findByIdAndUpdate(messageId, {
+                $push: { children: newResponse.id }
+            });
 
-            // Pass the placeholder ID so coordinator updates it instead of creating a duplicate
-            await sessionCoordinator.processTextInput(sessionId, newContent, { targetMessageId: newResponse._id as string });
+            // Trigger regeneration via SessionCoordinator (Async)
+            // We do NOT await this. The response will be streamed via gRPC.
+            const ephemSessionId = await this._ensureCoordinatorSession(conversationId, userId);
+            sessionCoordinator.processTextInput(ephemSessionId, newContent, { targetMessageId: newResponse._id.toString(), skipUserPersistence: true })
+                .catch(err => {
+                    console.error(`Async edit regeneration failed for session ${ephemSessionId}:`, err);
+                });
 
-            // Fetch updated response
-            newResponse = await ConversationMessage.findById(newResponse._id);
+            // Return pending response immediately
+            // newResponse is already the pending document we created above/fetched
         }
 
         // Build message ordering sequence
         const allMessages = await ConversationMessage.find({
-            sessionId,
+            conversationId,
             deletedAt: null
         }).sort({ timestamp: 1 });
 
@@ -542,10 +607,10 @@ class ConversationService {
             ordering
         };
     }
-    async getMessageGenerations(sessionId: string, messageId: string, userId: string) {
+    async getMessageGenerations(conversationId: string, messageId: string, userId: string) {
         const message = await ConversationMessage.findOne({
             _id: messageId,
-            sessionId,
+            conversationId,
             userId,
             deletedAt: null
         });
@@ -587,7 +652,7 @@ class ConversationService {
      * RESTRICTION: Only user messages can be deleted
      */
     async deleteMessage(
-        sessionId: string,
+        conversationId: string,
         messageId: string,
         userId: string
     ): Promise<{
@@ -598,7 +663,7 @@ class ConversationService {
     }> {
         const message = await ConversationMessage.findOne({
             _id: messageId,
-            sessionId,
+            conversationId,
             userId,
             deletedAt: null
         });
@@ -698,7 +763,7 @@ class ConversationService {
         // Find all messages that were deleted together
         const deletedAt = message.deletedAt;
         const messagesToRestore = await ConversationMessage.find({
-            sessionId: message.sessionId,
+            conversationId: message.conversationId,
             deletedAt,
             deletedBy: userId
         });

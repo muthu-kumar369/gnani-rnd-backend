@@ -2,7 +2,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IConversation extends Document {
     userId: string;
-    sessionId: string;
+    conversationId: string;
     title: string;
     systemPrompt: string;
     currentTemplate?: string;  // Template ID currently applied to this conversation
@@ -19,7 +19,7 @@ const conversationSchema = new Schema({
         required: true,
         index: true
     },
-    sessionId: {
+    conversationId: {
         type: String,
         required: true,
         unique: true,

@@ -3,7 +3,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IConversationSummary extends Document {
     userId: string;
-    sessionIds: string[];
+    conversationIds: string[];
     summary: string;
     messageCount: number;
     startTime: Date;
@@ -26,7 +26,7 @@ const conversationSummarySchema = new Schema({
         required: true,
         index: true
     },
-    sessionIds: [{
+    conversationIds: [{
         type: String,
         required: true
     }],

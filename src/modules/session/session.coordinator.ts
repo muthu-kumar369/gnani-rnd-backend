@@ -20,8 +20,8 @@ export interface Session {
     lastActivity: number;
     timeoutId: NodeJS.Timeout | null;
     onTranscriptionCallback: (transcript: string, isFinal: boolean) => Promise<void> | void;
-    onLlmChunkCallback?: (text: string) => Promise<void> | void;
-    onLlmCompleteCallback?: (text: string) => Promise<void> | void;
+    onLlmChunkCallback?: (text: string, messageId?: string) => Promise<void> | void;
+    onLlmCompleteCallback?: (text: string, messageId?: string) => Promise<void> | void;
     onToolStatusCallback?: (status: any) => Promise<void> | void;
     metadata: any;
 }
@@ -29,6 +29,7 @@ export interface Session {
 export class SessionCoordinator {
     private logger: Logger;
     private sessions: Map<string, Session> = new Map();
+    private abortControllers: Map<string, AbortController> = new Map(); // Track controllers for cancellation
     private SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
     constructor(
@@ -45,8 +46,8 @@ export class SessionCoordinator {
     async startSession(
         userId: string,
         onTranscriptionCallback: (transcript: string, isFinal: boolean) => Promise<void> | void,
-        onLlmChunkCallback?: (text: string) => Promise<void> | void,
-        onLlmCompleteCallback?: (text: string) => Promise<void> | void,
+        onLlmChunkCallback?: (text: string, messageId?: string) => Promise<void> | void,
+        onLlmCompleteCallback?: (text: string, messageId?: string) => Promise<void> | void,
         onToolStatusCallback?: (status: any) => Promise<void> | void,
         existingSessionId?: string,
         conversationId?: string  // NEW: Accept existing conversationId
@@ -98,11 +99,11 @@ export class SessionCoordinator {
 
         // Ensure Conversation document exists in MongoDB to prevent 404s on frontend
         try {
-            const conversationExists = await Conversation.exists({ sessionId: convId });  // NEW: Use conversationId
+            const conversationExists = await Conversation.exists({ conversationId: convId });  // NEW: Use conversationId
             if (!conversationExists) {
                 await Conversation.create({
                     userId,
-                    sessionId: convId,  // NEW: Use conversationId for database
+                    conversationId: convId,  // NEW: Use conversationId for database
                     title: 'New Conversation',
                     createdAt: new Date(),
                     updatedAt: new Date()
@@ -271,7 +272,7 @@ export class SessionCoordinator {
         }
     }
 
-    private async handleFinalTranscript(sessionId: string, transcript: string, options?: { targetMessageId?: string }): Promise<{ llmResponse: string } | void> {
+    private async handleFinalTranscript(sessionId: string, transcript: string, options?: { targetMessageId?: string, skipUserPersistence?: boolean }): Promise<{ llmResponse: string } | void> {
         this.logger.info(`[AUDIO-FLOW-11] handleFinalTranscript started`, {
             sessionId,
             transcript: transcript.substring(0, 100)
@@ -287,7 +288,7 @@ export class SessionCoordinator {
             this.logger.info(`[AUDIO-FLOW-12] Processing final transcript for session ${sessionId}: "${transcript.substring(0, 50)}..."`);
 
             // Step 1: Fetch conversation to get custom system prompt, current model, and current template
-            const conversation = await Conversation.findOne({ sessionId: session.conversationId }).lean();
+            const conversation = await Conversation.findOne({ conversationId: session.conversationId }).lean();
             const customSystemPrompt = conversation?.systemPrompt;
             const currentModel = conversation?.currentModel || 'gemma:2b'; // Default to gemma:2b
             const currentTemplateId = conversation?.currentTemplate;
@@ -310,35 +311,59 @@ export class SessionCoordinator {
                 }
             }
 
-            // Save User Message to MongoDB
-            try {
-                // FALLBACK SAFEGUARD: Ensure we have valid IDs
-                const convIdToSave = session.conversationId || sessionId;
-                const genIdToSave = uuidv4();
-
-                this.logger.info(`[persistence] Saving user message`, {
-                    userId: session.userId,
-                    sessionId: convIdToSave,
-                    originalSessionId: sessionId,
-                    originalConversationId: session.conversationId
-                });
-
-                await ConversationMessage.create({
-                    userId: session.userId,
-                    sessionId: convIdToSave, // Use fallback if needed
-                    role: 'user',
-                    content: transcript,
-                    timestamp: new Date(),
-                    generationId: genIdToSave,
-                    status: 'completed',
-                    version: 1
-                });
-            } catch (dbError: any) {
-                this.logger.error(`Failed to save user message: ${dbError.message}`);
+            // Save User Message to MongoDB (only if not skipping persistence)
+            let userMessageDoc: any = null;
+            if (!options?.skipUserPersistence) {
                 try {
-                    const fs = await import('fs');
-                    fs.appendFileSync('db_persistence_errors.log', `${new Date().toISOString()} - User Message Error: ${dbError.message}\n`);
-                } catch (e) { /* ignore */ }
+                    // FALLBACK SAFEGUARD: Ensure we have valid IDs
+                    const convIdToSave = session.conversationId || sessionId;
+                    const genIdToSave = uuidv4();
+
+                    // Find previous message to link
+                    const lastMessage = await ConversationMessage.findOne({ conversationId: convIdToSave })
+                        .sort({ timestamp: -1 });
+
+                    userMessageDoc = await ConversationMessage.create({
+                        userId: session.userId,
+                        conversationId: convIdToSave, // Use fallback if needed
+                        role: 'user',
+                        content: transcript,
+                        timestamp: new Date(),
+                        generationId: genIdToSave,
+                        status: 'completed',
+                        version: 1,
+                        parentId: lastMessage ? lastMessage._id.toString() : null
+                    });
+
+                    // Update parent's children
+                    if (lastMessage) {
+                        await ConversationMessage.findByIdAndUpdate(lastMessage._id, {
+                            $push: { children: userMessageDoc._id.toString() }
+                        });
+                    }
+
+                    this.logger.info(`[persistence] Saved user message ${userMessageDoc._id}`, {
+                        parentId: lastMessage ? lastMessage._id : 'root'
+                    });
+
+                } catch (dbError: any) {
+                    this.logger.error(`Failed to save user message: ${dbError.message}`);
+                    try {
+                        const fs = await import('fs');
+                        fs.appendFileSync('db_persistence_errors.log', `${new Date().toISOString()} - User Message Error: ${dbError.message}\n`);
+                    } catch (e) { /* ignore */ }
+                }
+            } else {
+                this.logger.info(`[persistence] Skipping user message save (Regeneration/Edit context)`);
+                // If skipping persistence (e.g. edit), we might need to find the target message to link assistant response to
+                // But typically options.targetMessageId handles the ASSISTANT message update/creation
+                // For 'Edit', the User message is ALREADY saved and passed in... wait.
+                // In 'processTextInput' for Edit, we pass 'skipUserPersistence: true'.
+                // But we need the 'userMessageId' to link the Assistant response!
+                // The Caller (ConversationService.editMessage) sets parentId in the Assistant message it creates.
+                // But here we create a NEW assistant message if options.targetMessageId is NOT set?
+                // Wait, ConversationService.editMessage calls processTextInput with targetMessageId set to the NEW pending response.
+                // So handleFinalTranscript updates that message.
             }
 
             // Step 2: Build context (memory + RAG)
@@ -382,12 +407,30 @@ export class SessionCoordinator {
                 });
             }
 
+            // Create AbortController for this generation
+            const controller = new AbortController();
+            this.abortControllers.set(sessionId, controller);
+
             const llmStartTime = Date.now();
-            const response = await this.llmExecutor.generate(
-                context,
-                session.onLlmChunkCallback,
-                currentModel // Pass the model to use
-            );
+            let response;
+            try {
+                response = await this.llmExecutor.generate(
+                    context,
+                    session.onLlmChunkCallback,
+                    currentModel, // Pass the model to use
+                    controller.signal // Pass the abort signal
+                );
+            } catch (error) {
+                if (error instanceof Error && (error.name === 'AbortError' || error.message.includes('aborted') || error.message.includes('canceled'))) {
+                    this.logger.info(`LLM generation aborted for session ${sessionId}`);
+                    return; // Stop processing further
+                }
+                throw error;
+            } finally {
+                // Cleanup controller
+                this.abortControllers.delete(sessionId);
+            }
+
             const llmDuration = Date.now() - llmStartTime;
             this.logger.info(`[AUDIO-FLOW-16] LLMExecutor returned for session ${sessionId}`, {
                 duration: llmDuration,
@@ -397,6 +440,7 @@ export class SessionCoordinator {
             });
 
             // Save Assistant Message to MongoDB
+            let finalMessageId = options?.targetMessageId;
             try {
                 // FALLBACK SAFEGUARD: Ensure we have valid IDs
                 const convIdToSave = session.conversationId || sessionId;
@@ -422,16 +466,23 @@ export class SessionCoordinator {
                             model: currentModel
                         } : undefined
                     });
+                    finalMessageId = options.targetMessageId;
                 } else {
-                    await ConversationMessage.create({
+                    // Determine parent ID: should be the User Message we just created
+                    // If we skipped user persistence, do we have a parent?
+                    // In normal flow, userMessageDoc is set.
+                    const parentId = userMessageDoc ? userMessageDoc._id.toString() : null;
+
+                    const newMsg = await ConversationMessage.create({
                         userId: session.userId,
-                        sessionId: convIdToSave, // Use fallback if needed
+                        conversationId: convIdToSave, // Use fallback if needed
                         role: 'assistant',
                         content: response.text,
                         timestamp: new Date(),
                         generationId: genIdToSave,
                         status: 'completed',
                         version: 1,
+                        parentId: parentId, // Link to user message
                         tokenUsage: response.tokenUsage ? {
                             inputTokens: response.tokenUsage.promptTokens,
                             outputTokens: response.tokenUsage.completionTokens,
@@ -440,6 +491,15 @@ export class SessionCoordinator {
                             model: currentModel
                         } : undefined
                     });
+
+                    // Update User Message children
+                    if (userMessageDoc) {
+                        await ConversationMessage.findByIdAndUpdate(userMessageDoc._id, {
+                            $push: { children: newMsg._id.toString() }
+                        });
+                    }
+
+                    finalMessageId = newMsg._id.toString();
                 }
             } catch (dbError: any) {
                 this.logger.error(`Failed to save assistant message: ${dbError.message}`);
@@ -478,7 +538,7 @@ export class SessionCoordinator {
             // Notify completion
             if (session.onLlmCompleteCallback) {
                 this.logger.info(`[TRACE] [AUDIO-FLOW-20] Calling onLlmCompleteCallback for session ${sessionId}`);
-                await session.onLlmCompleteCallback(response.text);
+                await session.onLlmCompleteCallback(response.text, finalMessageId);
             } else {
                 this.logger.error(`[TRACE] [AUDIO-FLOW-ERROR] onLlmCompleteCallback NOT DEFINED for session ${sessionId}`);
             }
@@ -551,7 +611,7 @@ export class SessionCoordinator {
         }
     }
 
-    async processTextInput(sessionId: string, textInput: string, options?: { targetMessageId?: string }): Promise<any> {
+    async processTextInput(sessionId: string, textInput: string, options?: { targetMessageId?: string, skipUserPersistence?: boolean }): Promise<any> {
         this.logger.info(`Processing text input for session ${sessionId}: "${textInput.substring(0, 50)}..."`);
         const session = this.sessions.get(sessionId);
         if (!session) {
@@ -622,6 +682,45 @@ export class SessionCoordinator {
         metrics.activeSessionsGauge.dec();
         auditService.logEvent('SESSION_END', session.userId, sessionId, {}, 'success');
 
+        return true;
+    }
+
+    async cancelStream(sessionId: string, messageId: string): Promise<boolean> {
+        this.logger.info(`Cancelling stream for session ${sessionId}, messageId: ${messageId}`);
+        const session = this.sessions.get(sessionId);
+
+        // Even if session is not active in memory, we might need to check if there's an active process
+        // For now, only cancel active in-memory sessions
+        if (!session) {
+            this.logger.warn(`Session ${sessionId} not found for cancellation`);
+            return false;
+        }
+
+        // 1. Stop LLM generation if active
+        const controller = this.abortControllers.get(sessionId);
+        if (controller) {
+            this.logger.info(`Aborting LLM generation for session ${sessionId}`);
+            controller.abort();
+            this.abortControllers.delete(sessionId);
+        } else {
+            this.logger.debug(`No active LLM controller found for session ${sessionId}`);
+        }
+
+        // 2. Stop Audio processing if active
+        // This is important if user cancels while speaking or processing audio
+        // TODO: Implement audio processing cancellation if supported by AudioProcessor
+
+        // 3. Mark session as idle
+        if (session.metadata?.grpcCall) {
+            session.metadata.grpcCall.write({
+                typing_status: {
+                    status: 'idle',
+                    message: undefined
+                }
+            });
+        }
+
+        this.logger.info(`Stream cancelled for session ${sessionId}`);
         return true;
     }
 

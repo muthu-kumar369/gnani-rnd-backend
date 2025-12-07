@@ -8,7 +8,7 @@ const logger = createContextualLogger({ module: 'ChatRoutes' });
 
 // HTTP Chat Endpoint for Mobile/Web clients (non-gRPC)
 router.post('/', authMiddleware, async (req: CustomRequest, res) => {
-    const { message, sessionId } = req.body;
+    const { message, conversationId, sessionId } = req.body; // Accept conversationId
     const userId = req.user?.id; // Extract userId from authenticated request
 
     if (!message) {
@@ -19,17 +19,24 @@ router.post('/', authMiddleware, async (req: CustomRequest, res) => {
         return res.status(401).json({ error: 'User not authenticated' });
     }
 
-    const currentSessionId = sessionId || await sessionCoordinator.startSession(
+    // Start session with conversationId
+    // We pass undefined for existingSessionId to let it generate a new ephemeral session
+    // unless the client specifically provided one.
+    const sessionResult = await sessionCoordinator.startSession(
         userId,
         async () => { }, // No-op for transcription callback
         async () => { }, // No-op for LLM chunk (we'll return full response)
         async () => { }, // No-op for LLM complete
         async () => { }, // No-op for tool status
-        sessionId // Pass existing sessionId if available
+        sessionId, // Optional existing ephemeral session
+        conversationId // Pass conversationId
     );
 
+    const currentSessionId = sessionResult.sessionId;
+    const currentConversationId = sessionResult.conversationId;
+
     try {
-        logger.info(`Processing HTTP chat request for session ${currentSessionId}`);
+        logger.info(`Processing HTTP chat request for conversation ${currentConversationId} (session ${currentSessionId})`);
 
         // Process text input via Coordinator
         const response = await sessionCoordinator.processTextInput(currentSessionId, message);
@@ -39,6 +46,7 @@ router.post('/', authMiddleware, async (req: CustomRequest, res) => {
         }
 
         res.json({
+            conversationId: currentConversationId, // Return conversationId
             sessionId: currentSessionId,
             message: response.llmResponse, // Changed from 'text' to 'message' to match frontend
             // intent and action are not currently returned by Coordinator's simplified interface

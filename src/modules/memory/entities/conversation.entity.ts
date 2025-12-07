@@ -3,7 +3,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IConversationMessage extends Document {
     userId: string;
-    sessionId: string;
+    conversationId: string;
     role: 'user' | 'assistant';
     content: string;
 
@@ -79,7 +79,7 @@ const conversationMessageSchema = new Schema({
         required: true,
         index: true
     },
-    sessionId: {
+    conversationId: {
         type: String,
         required: true,
         index: true
@@ -206,12 +206,12 @@ const conversationMessageSchema = new Schema({
 
 // Compound indexes for efficient queries
 conversationMessageSchema.index({ userId: 1, timestamp: -1 });
-conversationMessageSchema.index({ sessionId: 1, timestamp: 1 });
+conversationMessageSchema.index({ conversationId: 1, timestamp: 1 });
 conversationMessageSchema.index({ userId: 1, createdAt: 1 });
 conversationMessageSchema.index({ content: 'text' }); // Text index for search
 
 // NEW: Indexes for message lifecycle queries
-conversationMessageSchema.index({ sessionId: 1, deletedAt: 1, timestamp: 1 });
+conversationMessageSchema.index({ conversationId: 1, deletedAt: 1, timestamp: 1 });
 conversationMessageSchema.index({ parentMessageId: 1, generationIndex: 1 });
 conversationMessageSchema.index({ 'streamState.streamId': 1 }, { sparse: true });
 conversationMessageSchema.index({ status: 1, deletedAt: 1 });

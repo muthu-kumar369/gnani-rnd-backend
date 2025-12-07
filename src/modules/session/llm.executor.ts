@@ -31,10 +31,11 @@ export class LLMExecutor {
     async generate(
         context: any,
         onChunk?: (chunk: string) => Promise<void> | void,
-        model?: string
+        model?: string,
+        signal?: AbortSignal
     ): Promise<LLMResponse> {
         return withRetry(
-            async () => this.generateInternal(context, onChunk, model),
+            async () => this.generateInternal(context, onChunk, model, signal),
             {
                 maxRetries: 3,
                 initialDelay: 1000,
@@ -46,7 +47,8 @@ export class LLMExecutor {
     private async generateInternal(
         context: any,
         onChunk?: (chunk: string) => Promise<void> | void,
-        model?: string
+        model?: string,
+        signal?: AbortSignal
     ): Promise<LLMResponse> {
         try {
             // Month-3: Check LLM cache first
@@ -116,7 +118,8 @@ export class LLMExecutor {
                 const stream = llmManager.generate(promptString, {
                     stream: true,
                     temperature: 0.7,
-                    model: model // Pass the model to use
+                    model: model, // Pass the model to use
+                    signal: signal // Pass abort signal
                 });
 
                 let finalUsage;

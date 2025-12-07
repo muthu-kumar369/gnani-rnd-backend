@@ -68,7 +68,7 @@ router.patch('/:id/template', conversationController.updateTemplate);
 router.patch('/:id/model', conversationController.updateModel);
 
 // Export conversation
-router.get('/:sessionId/export/markdown', conversationController.exportMarkdown);
-router.get('/:sessionId/export/json', conversationController.exportJson);
+router.get('/:id/export/markdown', conversationController.exportMarkdown);
+router.get('/:id/export/json', conversationController.exportJson);
 
 export default router;

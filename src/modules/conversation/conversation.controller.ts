@@ -355,11 +355,11 @@ class ConversationController {
             const userId = req.user?.id;
             if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
-            const { sessionId } = req.params;
-            const markdown = await exportService.exportToMarkdown(sessionId, userId);
+            const { id } = req.params;
+            const markdown = await exportService.exportToMarkdown(id, userId);
 
             // Set headers for file download
-            const filename = `conversation-${sessionId}-${Date.now()}.md`;
+            const filename = `conversation-${id}-${Date.now()}.md`;
             res.setHeader('Content-Type', 'text/markdown');
             res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
             res.send(markdown);
@@ -377,11 +377,11 @@ class ConversationController {
             const userId = req.user?.id;
             if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
-            const { sessionId } = req.params;
-            const data = await exportService.exportToJson(sessionId, userId);
+            const { id } = req.params;
+            const data = await exportService.exportToJson(id, userId);
 
             // Set headers for file download
-            const filename = `conversation-${sessionId}-${Date.now()}.json`;
+            const filename = `conversation-${id}-${Date.now()}.json`;
             res.setHeader('Content-Type', 'application/json');
             res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
             res.json(data);

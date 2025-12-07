@@ -47,7 +47,8 @@ export class OllamaProvider implements LLMProvider {
                 },
                 {
                     responseType: 'stream',
-                    timeout: 30000 // 30 second timeout
+                    timeout: 30000, // 30 second timeout
+                    signal: options?.signal
                 }
             );
 

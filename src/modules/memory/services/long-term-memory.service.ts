@@ -25,7 +25,7 @@ class LongTermMemoryService {
 
         try {
             // Build conversation text
-            const conversationText = messages.map(msg => 
+            const conversationText = messages.map(msg =>
                 `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
             ).join('\n');
 
@@ -60,7 +60,7 @@ class LongTermMemoryService {
      */
     private extractTopics(messages: IConversationMessage[]): string[] {
         const topics = new Set<string>();
-        
+
         messages.forEach(msg => {
             if (msg.metadata?.intent) {
                 topics.add(msg.metadata.intent);
@@ -83,12 +83,12 @@ class LongTermMemoryService {
 
         try {
             const summary = await this.summarizeConversation(messages);
-            const sessionIds = [...new Set(messages.map(m => m.sessionId))];
+            const conversationIds = [...new Set(messages.map(m => m.conversationId))];
             const topics = this.extractTopics(messages);
 
             const conversationSummary = new ConversationSummary({
                 userId,
-                sessionIds,
+                conversationIds,
                 summary,
                 messageCount: messages.length,
                 startTime: messages[0].timestamp,
@@ -121,7 +121,7 @@ class LongTermMemoryService {
     ): Promise<boolean> {
         try {
             const embeddingId = `summary_${summaryId}_${uuidv4()}`;
-            
+
             await vectorManager.addEmbedding(
                 userId,
                 embeddingId,
@@ -143,12 +143,12 @@ class LongTermMemoryService {
             return true;
         } catch (error: any) {
             this.logger.error(`Error storing embedding: ${error.message}`);
-            
+
             // Update status to failed
             await ConversationSummary.findByIdAndUpdate(summaryId, {
                 embeddingStatus: 'failed'
             });
-            
+
             return false;
         }
     }
@@ -189,12 +189,12 @@ class LongTermMemoryService {
 
         try {
             // Group messages by conversation window (e.g., per day or per session)
-            const conversationGroups = this.groupMessagesBySession(messages);
+            const conversationGroups = this.groupMessagesByConversation(messages);
 
             for (const group of conversationGroups) {
                 // Create summary
                 const summary = await this.createSummary(userId, group);
-                
+
                 if (summary) {
                     // Store embedding
                     await this.storeEmbedding(
@@ -218,19 +218,19 @@ class LongTermMemoryService {
     }
 
     /**
-     * Group messages by session for summarization
+     * Group messages by conversation for summarization
      */
-    private groupMessagesBySession(messages: IConversationMessage[]): IConversationMessage[][] {
-        const sessionMap = new Map<string, IConversationMessage[]>();
+    private groupMessagesByConversation(messages: IConversationMessage[]): IConversationMessage[][] {
+        const conversationMap = new Map<string, IConversationMessage[]>();
 
         messages.forEach(msg => {
-            if (!sessionMap.has(msg.sessionId)) {
-                sessionMap.set(msg.sessionId, []);
+            if (!conversationMap.has(msg.conversationId)) {
+                conversationMap.set(msg.conversationId, []);
             }
-            sessionMap.get(msg.sessionId)!.push(msg);
+            conversationMap.get(msg.conversationId)!.push(msg);
         });
 
-        return Array.from(sessionMap.values());
+        return Array.from(conversationMap.values());
     }
 
     /**

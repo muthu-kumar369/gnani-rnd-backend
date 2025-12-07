@@ -8,15 +8,15 @@ class ExportService {
     /**
      * Export conversation to Markdown format
      */
-    async exportToMarkdown(sessionId: string, userId: string): Promise<string> {
-        const conversation = await Conversation.findOne({ sessionId, userId, isDeleted: false });
+    async exportToMarkdown(conversationId: string, userId: string): Promise<string> {
+        const conversation = await Conversation.findOne({ conversationId, userId, isDeleted: false });
 
         if (!conversation) {
             throw new Error('Conversation not found');
         }
 
         // Fetch all messages for this conversation
-        const messages = await ConversationMessage.find({ sessionId })
+        const messages = await ConversationMessage.find({ conversationId })
             .sort({ timestamp: 1 })
             .lean();
 
@@ -32,7 +32,7 @@ class ExportService {
 
         let markdown = `# ${title}\n\n`;
         markdown += `**Created**: ${createdAt}\n`;
-        markdown += `**Session ID**: ${sessionId}\n`;
+        markdown += `**Conversation ID**: ${conversationId}\n`;
         markdown += `**Messages**: ${messages.length}\n\n`;
         markdown += `---\n\n`;
 
@@ -91,20 +91,20 @@ class ExportService {
     /**
      * Export conversation to JSON format
      */
-    async exportToJson(sessionId: string, userId: string): Promise<Record<string, any>> {
-        const conversation = await Conversation.findOne({ sessionId, userId, isDeleted: false });
+    async exportToJson(conversationId: string, userId: string): Promise<Record<string, any>> {
+        const conversation = await Conversation.findOne({ conversationId, userId, isDeleted: false });
 
         if (!conversation) {
             throw new Error('Conversation not found');
         }
 
         // Fetch all messages for this conversation
-        const messages = await ConversationMessage.find({ sessionId })
+        const messages = await ConversationMessage.find({ conversationId })
             .sort({ timestamp: 1 })
             .lean();
 
         return {
-            sessionId: conversation.sessionId,
+            conversationId: conversation.conversationId,
             title: conversation.title || 'Untitled Conversation',
             userId: conversation.userId,
             createdAt: conversation.createdAt,
