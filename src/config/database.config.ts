@@ -21,14 +21,29 @@ const connectDB = async (): Promise<void> => {
             const indexes = await usersCollection.indexes();
             const indexName = 'devices.deviceId_1';
             const indexExists = indexes.some(index => index.name === indexName);
-            
+
             if (indexExists) {
                 await usersCollection.dropIndex(indexName);
                 logger.info(`Dropped legacy unique index: ${indexName}`);
             }
         } catch (indexError: any) {
-             // Log warning but don't fail connection
-             logger.warn(`Attempted to drop index devices.deviceId_1 but failed (this is expected if it doesn't exist): ${indexError.message}`);
+            // Log warning but don't fail connection
+            logger.warn(`Attempted to drop index devices.deviceId_1 but failed (this is expected if it doesn't exist): ${indexError.message}`);
+        }
+
+        // Fix for duplicate key error on sessionId (legacy)
+        try {
+            const conversationsCollection = mongoose.connection.collection('conversations');
+            const indexes = await conversationsCollection.indexes();
+            const indexName = 'sessionId_1';
+            const indexExists = indexes.some(index => index.name === indexName);
+
+            if (indexExists) {
+                await conversationsCollection.dropIndex(indexName);
+                logger.info(`Dropped legacy unique index: ${indexName} from conversations`);
+            }
+        } catch (indexError: any) {
+            logger.warn(`Attempted to drop index sessionId_1 but failed: ${indexError.message}`);
         }
     } catch (err: any) {
         logger.error(`MongoDB connection error: ${err.message}`);
