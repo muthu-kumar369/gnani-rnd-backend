@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { Logger } from 'winston';
+import { CircuitBreaker } from '../../core/reliability/circuit-breaker.js';
 
 export class WhisperCppService {
   private logger: Logger;
@@ -13,9 +14,17 @@ export class WhisperCppService {
   private modelPath: string;
   private isAvailable: boolean = false;
   private useWsl: boolean = false;
+  private whisperCircuitBreaker: CircuitBreaker; // Stage 2
 
   constructor() {
     this.logger = createContextualLogger({ module: 'WhisperCppService' });
+
+    // Stage 2: Initialize Whisper circuit breaker
+    this.whisperCircuitBreaker = new CircuitBreaker('Whisper', {
+      failureThreshold: 3,
+      resetTimeoutMs: 20000,
+      requestTimeoutMs: 30000 // STT can be slow
+    });
 
     // Default paths (will be overridden if WSL is used)
     const homeDir = os.homedir();
@@ -104,7 +113,10 @@ export class WhisperCppService {
         wavFileExists: fs.existsSync(tempFile)
       });
 
-      const transcript = await this.runWhisper(tempFile);
+      // Stage 2: Wrap with circuit breaker
+      const transcript = await this.whisperCircuitBreaker.execute(async () => {
+        return await this.runWhisper(tempFile);
+      });
 
       // Record metrics
       const duration = Date.now() - startTime;

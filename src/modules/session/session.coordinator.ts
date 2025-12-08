@@ -12,6 +12,9 @@ import auditService from '../../core/logger/audit.service.js';
 import { Logger } from 'winston';
 import Conversation from '../conversation/conversation.model.js';
 import ConversationMessage from '../memory/entities/conversation.entity.js';
+import sessionPersistence from './session.persistence.js';
+import assistantStateMachine from '../../core/state-machine/assistant.machine.js';
+import { AssistantEvent, AssistantState } from '../../core/state-machine/assistant-states.js';
 
 export interface Session {
     userId: string;
@@ -31,6 +34,7 @@ export class SessionCoordinator {
     private sessions: Map<string, Session> = new Map();
     private abortControllers: Map<string, AbortController> = new Map(); // Track controllers for cancellation
     private SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+    private checkpointCounters: Map<string, number> = new Map();
 
     constructor(
         private audioProcessor: AudioProcessor,
@@ -41,6 +45,12 @@ export class SessionCoordinator {
     ) {
         this.logger = createContextualLogger({ module: 'SessionCoordinator' });
         this.logger.info('SessionCoordinator initialized');
+
+        // Stage 11: Listen to state machine events
+        assistantStateMachine.on('stateChange', ({ from, to, event }) => {
+            this.logger.info(`State transition: ${from} → ${to} (${event})`);
+            // TODO: Broadcast to frontend via gRPC if needed
+        });
     }
 
     async startSession(
@@ -119,6 +129,35 @@ export class SessionCoordinator {
         metrics.activeSessionsGauge.inc();
         auditService.logEvent('SESSION_START', userId, sessionId, { conversationId: convId }, 'success');
 
+        // Stage 11: Activate state machine
+        try {
+            assistantStateMachine.transition(AssistantEvent.ACTIVATE);
+            this.logger.debug(`State machine activated for session ${sessionId}`);
+        } catch (error: any) {
+            this.logger.warn(`State machine transition failed: ${error.message}`);
+        }
+
+        // Stage 1: Persist to MongoDB
+        try {
+            await sessionPersistence.saveSession({
+                sessionId,
+                userId,
+                conversationId: convId,
+                state: 'IDLE', // State machine: assistantStateMachine.getCurrentState()
+                audioBuffer: null,
+                pendingTranscript: null,
+                contextSnapshot: null,
+                llmState: null,
+                createdAt: new Date(),
+                lastActivity: new Date(),
+                expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+                metadata: { grpcCallActive: false, deviceInfo: null }
+            });
+            this.logger.debug(`Session persisted to MongoDB: ${sessionId}`);
+        } catch (error: any) {
+            this.logger.error(`Failed to persist session to MongoDB: ${error.message}`);
+        }
+
         return { sessionId, conversationId: convId };  // NEW: Return both IDs
     }
 
@@ -176,6 +215,16 @@ export class SessionCoordinator {
             throw new Error(`Session ${sessionId} not found`);
         }
 
+        // Stage 11: Transition to LISTENING state when audio starts
+        try {
+            if (assistantStateMachine.isInState(AssistantState.IDLE)) {
+                assistantStateMachine.transition(AssistantEvent.SPEECH_START);
+                this.logger.debug(`State machine: IDLE → LISTENING (audio chunk received)`);
+            }
+        } catch (error: any) {
+            this.logger.warn(`State machine transition failed: ${error.message}`);
+        }
+
         session.lastActivity = Date.now();
         this.resetSessionTimeout(sessionId);
 
@@ -184,6 +233,13 @@ export class SessionCoordinator {
             lastActivity: Date.now(),
             isSpeaking: true
         }).catch(err => this.logger.error(`Failed to update Redis session state: ${err.message}`));
+
+        // Stage 1: Checkpoint every 10 chunks
+        if (this.shouldCheckpoint(sessionId)) {
+            this.checkpointSession(sessionId).catch((err: any) =>
+                this.logger.error(`Failed to checkpoint session: ${err.message}`)
+            );
+        }
 
         this.logger.info(`[AUDIO-FLOW-4] Delegating to audio processor for session ${sessionId}`);
 
@@ -243,6 +299,16 @@ export class SessionCoordinator {
                 reason: 'Invalid/noise transcript detected'
             });
             return;
+        }
+
+        // Stage 11: Transition to PROCESSING state when transcript is ready
+        if (isFinal) {
+            try {
+                assistantStateMachine.transition(AssistantEvent.TRANSCRIPT_READY);
+                this.logger.debug(`State machine: LISTENING → PROCESSING (transcript ready)`);
+            } catch (error: any) {
+                this.logger.warn(`State machine transition failed: ${error.message}`);
+            }
         }
 
         // Notify frontend
@@ -368,6 +434,15 @@ export class SessionCoordinator {
 
             // Step 2: Build context (memory + RAG)
             this.logger.info(`[AUDIO-FLOW-13] Building context for session ${sessionId}...`);
+
+            // Stage 11: Transition to THINKING state
+            try {
+                assistantStateMachine.transition(AssistantEvent.CONTEXT_READY);
+                this.logger.debug(`State machine: PROCESSING → THINKING (building context)`);
+            } catch (error: any) {
+                this.logger.warn(`State machine transition failed: ${error.message}`);
+            }
+
             const contextStartTime = Date.now();
             const context = await this.contextBuilder.build(
                 sessionId,
@@ -396,6 +471,14 @@ export class SessionCoordinator {
 
             // Step 3: Generate LLM response
             this.logger.info(`[AUDIO-FLOW-15] Calling LLMExecutor.generate for session ${sessionId}...`);
+
+            // Stage 11: Transition to GENERATING state
+            try {
+                assistantStateMachine.transition(AssistantEvent.LLM_START);
+                this.logger.debug(`State machine: THINKING → GENERATING (starting LLM)`);
+            } catch (error: any) {
+                this.logger.warn(`State machine transition failed: ${error.message}`);
+            }
 
             // Emit typing status: generating
             if (session.metadata?.grpcCall) {
@@ -438,6 +521,14 @@ export class SessionCoordinator {
                 hasToolCalls: !!(response?.toolCalls?.length),
                 modelUsed: currentModel
             });
+
+            // Stage 11: Transition to SPEAKING state (LLM complete)
+            try {
+                assistantStateMachine.transition(AssistantEvent.LLM_COMPLETE);
+                this.logger.debug(`State machine: GENERATING → SPEAKING (LLM complete)`);
+            } catch (error: any) {
+                this.logger.warn(`State machine transition failed: ${error.message}`);
+            }
 
             // Save Assistant Message to MongoDB
             let finalMessageId = options?.targetMessageId;
@@ -512,6 +603,15 @@ export class SessionCoordinator {
             // Step 4: Execute tools if needed
             if (response.toolCalls && response.toolCalls.length > 0) {
                 this.logger.info(`[AUDIO-FLOW-17] Executing ${response.toolCalls.length} tool(s) for session ${sessionId}`);
+
+                // Stage 11: Transition to TOOL_EXECUTING state
+                try {
+                    assistantStateMachine.transition(AssistantEvent.TOOL_START);
+                    this.logger.debug(`State machine: SPEAKING → TOOL_EXECUTING (executing tools)`);
+                } catch (error: any) {
+                    this.logger.warn(`State machine transition failed: ${error.message}`);
+                }
+
                 await this.toolExecutor.executeTools(
                     sessionId,
                     response.toolCalls,
@@ -645,6 +745,14 @@ export class SessionCoordinator {
             return false;
         }
 
+        // Stage 11: Transition to IDLE state (deactivate)
+        try {
+            assistantStateMachine.transition(AssistantEvent.RESET);
+            this.logger.debug(`State machine: * → IDLE (session ended)`);
+        } catch (error: any) {
+            this.logger.warn(`State machine transition failed: ${error.message}`);
+        }
+
         // Cleanup timeout
         if (session.timeoutId) {
             clearTimeout(session.timeoutId);
@@ -681,6 +789,16 @@ export class SessionCoordinator {
         this.logger.info(`Session ended: ${sessionId}`);
         metrics.activeSessionsGauge.dec();
         auditService.logEvent('SESSION_END', session.userId, sessionId, {}, 'success');
+
+        // Stage 1: Delete from MongoDB
+        try {
+            await sessionPersistence.deleteSession(sessionId);
+            this.logger.debug(`Session deleted from MongoDB: ${sessionId}`);
+        } catch (error: any) {
+            this.logger.error(`Failed to delete session from MongoDB: ${error.message}`);
+        }
+
+        this.checkpointCounters.delete(sessionId);
 
         return true;
     }
@@ -795,6 +913,37 @@ export class SessionCoordinator {
         }
 
         return true;
+    }
+
+    /**
+     * Stage 1: Check if session should be checkpointed
+     */
+    private shouldCheckpoint(sessionId: string): boolean {
+        const count = (this.checkpointCounters.get(sessionId) || 0) + 1;
+        this.checkpointCounters.set(sessionId, count);
+
+        if (count >= 10) {
+            this.checkpointCounters.set(sessionId, 0);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Stage 1: Checkpoint session to MongoDB
+     */
+    private async checkpointSession(sessionId: string): Promise<void> {
+        const session = this.sessions.get(sessionId);
+        if (!session) return;
+
+        await sessionPersistence.checkpoint(sessionId, {
+            sessionId,
+            userId: session.userId,
+            conversationId: session.conversationId,
+            state: 'IDLE',
+            lastActivity: new Date(),
+            metadata: session.metadata
+        });
     }
 
     getActiveSessionCount(): number {

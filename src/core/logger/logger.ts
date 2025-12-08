@@ -1,4 +1,5 @@
-// backend/src/utils/logger.ts
+// backend/src/core/logger/logger.ts
+// Stage 5: Enhanced structured logging
 import winston, { Logger } from "winston";
 import {
   LOG_LEVEL,
@@ -7,39 +8,46 @@ import {
 } from "../../config/env.config.js";
 
 const createBaseLogger = (defaultMeta: object = {}): Logger => {
+  // Stage 5: JSON format for structured logging
+  const jsonFormat = winston.format.combine(
+    winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
+    winston.format.errors({ stack: true }),
+    winston.format.json()
+  );
+
+  // Stage 5: Conditional console format (colorized for dev, JSON for prod)
+  const consoleFormat = process.env.NODE_ENV === 'development'
+    ? winston.format.combine(
+      winston.format.colorize(),
+      winston.format.simple()
+    )
+    : jsonFormat;
+
   const transports: winston.transport[] = [
     new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.simple()
-      ),
+      format: consoleFormat,
     }),
     new winston.transports.File({
       filename: LOG_FILE_ERROR,
       level: "error",
-      format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.json()
-      ),
+      format: jsonFormat,
     }),
     new winston.transports.File({
       filename: LOG_FILE_COMBINED,
-      format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.json()
-      ),
+      format: jsonFormat,
     }),
   ];
 
   return winston.createLogger({
     level: LOG_LEVEL,
-    format: winston.format.combine(
-      winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
-      winston.format.errors({ stack: true }),
-      winston.format.splat(),
-      winston.format.json()
-    ),
-    defaultMeta: { service: 'gnani-backend', ...defaultMeta },
+    format: jsonFormat,
+    // Stage 5: Enhanced default metadata
+    defaultMeta: {
+      service: 'gnani-backend',
+      environment: process.env.NODE_ENV || 'development',
+      version: process.env.APP_VERSION || '1.0.0',
+      ...defaultMeta
+    },
     transports: transports,
   });
 };

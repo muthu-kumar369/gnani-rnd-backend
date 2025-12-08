@@ -1,6 +1,17 @@
 // Redis configuration
 import { Redis } from 'ioredis';
 import { REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, REDIS_DB } from './env.config.js';
+import { CircuitBreaker } from '../core/reliability/circuit-breaker.js';
+import { createContextualLogger } from '../core/logger/logger.js';
+
+const logger = createContextualLogger({ module: 'Redis' });
+
+// Stage 2: Redis circuit breaker
+export const redisCircuitBreaker = new CircuitBreaker('Redis', {
+  failureThreshold: 5,
+  resetTimeoutMs: 20000,
+  requestTimeoutMs: 5000
+});
 
 // Create Redis client instance
 const redisClient = new Redis({
@@ -10,8 +21,12 @@ const redisClient = new Redis({
   db: REDIS_DB,
   // Production Tuning
   retryStrategy: (times: number) => {
+    if (times > 3) {
+      logger.error('Redis max retries exceeded');
+      return null;
+    }
     // Exponential backoff with jitter
-    const delay = Math.min(times * 50, 2000);
+    const delay = Math.min(times * 200, 2000);
     return delay;
   },
   reconnectOnError: (err: Error) => {
@@ -23,7 +38,7 @@ const redisClient = new Redis({
     return false;
   },
   lazyConnect: true,
-  maxRetriesPerRequest: null, // Required for BullMQ
+  maxRetriesPerRequest: 3,
   enableReadyCheck: true,
   keepAlive: 10000, // Send keep-alive every 10 seconds
   connectTimeout: 10000, // 10 seconds connection timeout
@@ -32,24 +47,41 @@ const redisClient = new Redis({
 
 // Event handlers
 redisClient.on('connect', () => {
-  console.log('✓ Redis client connected');
+  logger.info('Redis client connected');
 });
 
 redisClient.on('ready', () => {
-  console.log('✓ Redis client ready');
+  logger.info('Redis client ready');
 });
 
 redisClient.on('error', (err: Error) => {
-  console.error('✗ Redis client error:', err);
+  logger.error(`Redis client error: ${err.message}`);
 });
 
 redisClient.on('close', () => {
-  console.log('Redis client connection closed');
+  logger.warn('Redis client connection closed');
 });
 
 redisClient.on('reconnecting', () => {
-  console.log('Redis client reconnecting...');
+  logger.info('Redis client reconnecting...');
 });
+
+// Stage 2: Wrapper for Redis operations with fallback
+export async function withRedisCircuitBreaker<T>(
+  operation: () => Promise<T>,
+  fallback?: () => T
+): Promise<T> {
+  try {
+    return await redisCircuitBreaker.execute(operation);
+  } catch (error: any) {
+    logger.warn(`Redis operation failed: ${error.message}`);
+    if (fallback) {
+      logger.info('Using fallback for Redis operation');
+      return fallback();
+    }
+    throw error;
+  }
+}
 
 export { redisClient };
 export default redisClient;

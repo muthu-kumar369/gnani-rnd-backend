@@ -1,0 +1,162 @@
+// Stage 1: Session Persistence Integration Patch
+// This file contains all the code snippets to add to session.coordinator.ts
+
+// ============================================
+// 1. ADD IMPORT (after line 14)
+// ============================================
+import sessionPersistence from './session.persistence.js';
+
+// ============================================
+// 2. ADD CHECKPOINT COUNTER (after line 33)
+// ============================================
+private checkpointCounters: Map<string, number> = new Map();
+
+// ============================================
+// 3. ADD TO startSession() - AFTER line 124 (after auditService.logEvent)
+// ============================================
+// Stage 1: Persist to MongoDB
+try {
+    await sessionPersistence.saveSession({
+        sessionId,
+        userId,
+        conversationId: convId,
+        state: 'IDLE',
+        audioBuffer: null,
+        pendingTranscript: null,
+        contextSnapshot: null,
+        llmState: null,
+        createdAt: new Date(),
+        lastActivity: new Date(),
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        metadata: { grpcCallActive: false, deviceInfo: null }
+    });
+    this.logger.debug(`Session persisted to MongoDB: ${sessionId}`);
+} catch (error: any) {
+    this.logger.error(`Failed to persist session to MongoDB: ${error.message}`);
+}
+
+// ============================================
+// 4. ADD TO processAudioChunk() - AFTER line 212 (after Redis update)
+// ============================================
+// Stage 1: Checkpoint every 10 chunks
+if (this.shouldCheckpoint(sessionId)) {
+    this.checkpointSession(sessionId).catch(err =>
+        this.logger.error(`Failed to checkpoint session: ${err.message}`)
+    );
+}
+
+// ============================================
+// 5. REPLACE recoverSession() method (lines 133-164)
+// ============================================
+async recoverSession(sessionId: string): Promise<Session | null> {
+    this.logger.info(`Attempting to recover session: ${sessionId}`);
+
+    // Stage 1: Try MongoDB first (most complete state)
+    try {
+        const persistedSession = await sessionPersistence.loadSession(sessionId);
+
+        if (persistedSession) {
+            this.logger.info(`Session recovered from MongoDB: ${sessionId}`);
+
+            const session: Session = {
+                userId: persistedSession.userId,
+                conversationId: persistedSession.conversationId,
+                createdAt: persistedSession.createdAt.getTime(),
+                lastActivity: Date.now(),
+                timeoutId: null,
+                onTranscriptionCallback: async () => {},
+                onLlmChunkCallback: async () => {},
+                onLlmCompleteCallback: async () => {},
+                onToolStatusCallback: async () => {},
+                metadata: persistedSession.metadata || { grpcCallActive: false, deviceInfo: null }
+            };
+
+            this.sessions.set(sessionId, session);
+            await this.audioProcessor.initialize(sessionId);
+
+            if (persistedSession.audioBuffer?.storageUrl) {
+                this.logger.info(`Audio buffer available at: ${persistedSession.audioBuffer.storageUrl}`);
+            }
+
+            this.resetSessionTimeout(sessionId);
+            return session;
+        }
+    } catch (error: any) {
+        this.logger.error(`Failed to recover from MongoDB: ${error.message}`);
+    }
+
+    // Fallback to Redis
+    const state = await sessionMemory.getSessionState(sessionId);
+    if (!state || !state.userId) {
+        this.logger.warn(`Session not found in MongoDB or Redis: ${sessionId}`);
+        return null;
+    }
+
+    this.logger.info(`Session recovered from Redis (partial): ${sessionId}`);
+
+    const session: Session = {
+        userId: state.userId,
+        conversationId: state.conversationId || sessionId,
+        createdAt: Date.now(),
+        lastActivity: Date.now(),
+        timeoutId: null,
+        onTranscriptionCallback: async () => {},
+        onLlmChunkCallback: async () => {},
+        onLlmCompleteCallback: async () => {},
+        onToolStatusCallback: async () => {},
+        metadata: state.metadata || { grpcCallActive: false, deviceInfo: null }
+    };
+
+    this.sessions.set(sessionId, session);
+    await this.audioProcessor.initialize(sessionId);
+    this.resetSessionTimeout(sessionId);
+
+    return session;
+}
+
+// ============================================
+// 6. ADD TO endSession() - BEFORE return true (around line 801)
+// ============================================
+// Stage 1: Delete from MongoDB
+try {
+    await sessionPersistence.deleteSession(sessionId);
+    this.logger.debug(`Session deleted from MongoDB: ${sessionId}`);
+} catch (error: any) {
+    this.logger.error(`Failed to delete session from MongoDB: ${error.message}`);
+}
+
+this.checkpointCounters.delete(sessionId);
+
+// ============================================
+// 7. ADD HELPER METHODS - BEFORE getActiveSessionCount() (around line 804)
+// ============================================
+/**
+ * Stage 1: Check if session should be checkpointed
+ */
+private shouldCheckpoint(sessionId: string): boolean {
+    const count = (this.checkpointCounters.get(sessionId) || 0) + 1;
+    this.checkpointCounters.set(sessionId, count);
+
+    if (count >= 10) {
+        this.checkpointCounters.set(sessionId, 0);
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Stage 1: Checkpoint session to MongoDB
+ */
+private async checkpointSession(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    await sessionPersistence.checkpoint(sessionId, {
+        sessionId,
+        userId: session.userId,
+        conversationId: session.conversationId,
+        state: 'IDLE',
+        lastActivity: new Date(),
+        metadata: session.metadata
+    });
+}

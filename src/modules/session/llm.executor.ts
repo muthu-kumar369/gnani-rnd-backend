@@ -195,7 +195,7 @@ export class LLMExecutor {
         } catch (error) {
             this.logger.error('LLM generation failed', { error });
             metrics.incrementErrors('llm', 'generation');
-            throw new LLMError(`Failed to generate LLM response: ${(error as Error).message}`, 'llm-executor');
+            throw new LLMError(`Failed to generate LLM response: ${(error as Error).message}`);
         }
     }
 

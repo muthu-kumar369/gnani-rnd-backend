@@ -1,5 +1,6 @@
 import { createContextualLogger } from '../logger/logger.js';
 import { Logger } from 'winston';
+import metrics from '../monitoring/metrics.js';
 
 export enum CircuitState {
     CLOSED = 'CLOSED',     // Normal operation
@@ -11,11 +12,14 @@ export interface CircuitBreakerConfig {
     failureThreshold: number;      // Number of failures before opening
     resetTimeoutMs: number;        // Time to wait before trying again (Half-Open)
     requestTimeoutMs?: number;     // Timeout for individual requests
+    halfOpenRequests?: number;     // Number of successful requests needed in half-open
+    monitoringEnabled?: boolean;   // Enable Prometheus metrics
 }
 
 export class CircuitBreaker {
     private state: CircuitState = CircuitState.CLOSED;
     private failureCount: number = 0;
+    private successCount: number = 0; // For half-open state
     private lastFailureTime: number = 0;
     private config: CircuitBreakerConfig;
     private logger: Logger;
@@ -23,8 +27,13 @@ export class CircuitBreaker {
 
     constructor(name: string, config: CircuitBreakerConfig) {
         this.name = name;
-        this.config = config;
+        this.config = {
+            ...config,
+            halfOpenRequests: config.halfOpenRequests || 3,
+            monitoringEnabled: config.monitoringEnabled !== false
+        };
         this.logger = createContextualLogger({ module: `CircuitBreaker:${name}` });
+        this.updateMetrics();
     }
 
     /**
@@ -77,9 +86,18 @@ export class CircuitBreaker {
 
     private onSuccess() {
         if (this.state === CircuitState.HALF_OPEN) {
-            this.transitionTo(CircuitState.CLOSED);
+            this.successCount++;
+            this.logger.debug(`Half-open success count: ${this.successCount}/${this.config.halfOpenRequests}`);
+
+            if (this.successCount >= (this.config.halfOpenRequests || 3)) {
+                this.transitionTo(CircuitState.CLOSED);
+                this.successCount = 0;
+            }
+        } else if (this.state === CircuitState.CLOSED) {
+            this.failureCount = 0; // Reset on success
         }
-        this.failureCount = 0;
+
+        this.updateMetrics();
     }
 
     private onFailure(error: Error) {
@@ -87,9 +105,15 @@ export class CircuitBreaker {
         this.lastFailureTime = Date.now();
         this.logger.error(`Request failed (Count: ${this.failureCount}/${this.config.failureThreshold}): ${error.message}`);
 
-        if (this.state === CircuitState.HALF_OPEN || this.failureCount >= this.config.failureThreshold) {
+        if (this.state === CircuitState.HALF_OPEN) {
+            this.logger.warn(`Half-open test failed, circuit transitioning to OPEN: ${this.name}`);
+            this.transitionTo(CircuitState.OPEN);
+            this.successCount = 0;
+        } else if (this.failureCount >= this.config.failureThreshold) {
             this.transitionTo(CircuitState.OPEN);
         }
+
+        this.updateMetrics();
     }
 
     private transitionTo(newState: CircuitState) {
@@ -98,9 +122,52 @@ export class CircuitBreaker {
         if (newState === CircuitState.CLOSED) {
             this.failureCount = 0;
         }
+        this.updateMetrics();
+    }
+
+    private updateMetrics(): void {
+        if (!this.config.monitoringEnabled) return;
+
+        // Update circuit breaker state metric
+        const stateValue = this.state === CircuitState.CLOSED ? 0 :
+            this.state === CircuitState.HALF_OPEN ? 1 : 2;
+
+        metrics.circuitBreakerState.set(
+            { circuit: this.name, state: this.state },
+            stateValue
+        );
+
+        metrics.circuitBreakerFailures.set(
+            { circuit: this.name },
+            this.failureCount
+        );
     }
 
     getState(): CircuitState {
         return this.state;
+    }
+
+    getStats() {
+        return {
+            state: this.state,
+            failureCount: this.failureCount,
+            successCount: this.successCount,
+            lastFailureTime: this.lastFailureTime
+        };
+    }
+
+    // Manual control (for testing/admin)
+    forceOpen(): void {
+        this.state = CircuitState.OPEN;
+        this.logger.warn(`Circuit manually forced OPEN: ${this.name}`);
+        this.updateMetrics();
+    }
+
+    forceClose(): void {
+        this.state = CircuitState.CLOSED;
+        this.failureCount = 0;
+        this.successCount = 0;
+        this.logger.info(`Circuit manually forced CLOSED: ${this.name}`);
+        this.updateMetrics();
     }
 }

@@ -10,8 +10,12 @@ import errorHandler from './core/http/error.middleware.js';
 import corsMiddleware from './middleware/cors.middleware.js';
 import { globalRateLimiter, strictRateLimiter } from './middleware/rate-limit.middleware.js';
 import healthRoutes from './routes/health.routes.js';
+import metricsRoutes from './routes/metrics.routes.js'; // Stage 6
 import { startTracing } from './core/tracing/tracer.js';
 import { configureSecurityMiddleware } from './middleware/security.middleware.js';
+import { requestIdMiddleware } from './middleware/request-id.middleware.js'; // Stage 5
+import { metricsMiddleware } from './middleware/metrics.middleware.js'; // Stage 6
+import { setupSwagger } from './docs/swagger.config.js'; // Stage 12: API Documentation
 // import { startTracing } from './core/tracing/tracer.js';
 
 // Start tracing before app initialization
@@ -21,6 +25,12 @@ const app: Application = express();
 
 // Security Middleware (Helmet)
 configureSecurityMiddleware(app);
+
+// Stage 5: Request ID middleware for request correlation
+app.use(requestIdMiddleware);
+
+// Stage 6: Metrics middleware for HTTP tracking
+app.use(metricsMiddleware);
 
 // Middleware
 app.use(globalRateLimiter); // Apply global rate limiting first
@@ -32,7 +42,11 @@ app.use(morgan('combined', { stream: { write: (message: string) => logger.info(m
 
 // Routes
 app.use('/', healthRoutes); // Register health routes at root level (e.g. /health, /ready)
+app.use('/', metricsRoutes); // Stage 6: Prometheus metrics endpoint
 app.use('/api', apiRoutes);
+
+// Stage 12: Setup Swagger API Documentation
+setupSwagger(app);
 
 // General endpoint (can remain as is or be removed if all routes are in modular files)
 app.get('/', (req: Request, res: Response) => {

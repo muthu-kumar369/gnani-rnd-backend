@@ -15,6 +15,8 @@ import { toolWorker } from './queues/tool.queue.js';
 import { startTracing } from './core/monitoring/tracing.js';
 import shutdownManager from './core/shutdown/shutdown-manager.js';
 import metrics from './core/monitoring/metrics.js';
+// Stage 4: Startup checks
+import { runStartupChecks } from './core/startup/startup-checks.js';
 
 import { templateService } from './modules/template/template.service.js';
 import { toolService } from './modules/tool/tool.service.js';
@@ -22,6 +24,8 @@ import { toolService } from './modules/tool/tool.service.js';
 // Initialize services
 (async () => {
     try {
+        logger.info('Starting GNANI Backend application...');
+
         // Connect to Redis
         try {
             await redisClient.connect();
@@ -34,62 +38,74 @@ import { toolService } from './modules/tool/tool.service.js';
 
         // Connect to MongoDB
         await connectDB();
-        
+
         // Seed default templates
         await templateService.seedDefaults();
         // Seed default tools
         await toolService.seedDefaults();
 
+        // Stage 4: Run startup checks
+        logger.info('Running startup checks...');
+        const checksPass = await runStartupChecks();
+        if (!checksPass) {
+            logger.error('Startup checks failed, exiting...');
+            process.exit(1);
+        }
+
         // Start Express.js server and get the http.Server instance
         const httpServer = startExpressServer();
         startGrpcServer();
 
-// Month-2: Register HTTP server with shutdown manager
-shutdownManager.setHttpServer(httpServer);
+        // Month-2: Register HTTP server with shutdown manager
+        shutdownManager.setHttpServer(httpServer);
 
-// Initialize background jobs
-logger.info('Initializing background jobs...');
-memoryCleanupJob.schedule();
-summarizationJob.schedule();
+        // Initialize background jobs
+        logger.info('Initializing background jobs...');
+        memoryCleanupJob.schedule();
+        summarizationJob.schedule();
 
-// Phase 4: Start cleanup jobs
-cleanupJob.start();
-mongoDBCleanupJob.start();
-logger.info('Phase 4 cleanup jobs started (ChromaDB, MongoDB)');
+        // Phase 4: Start cleanup jobs
+        cleanupJob.start();
+        mongoDBCleanupJob.start();
+        logger.info('Phase 4 cleanup jobs started (ChromaDB, MongoDB)');
 
-// Phase 4: Task queue worker is automatically started when imported
-logger.info('Phase 4 task queue worker started');
+        // Stage 1: Start session cleanup job
+        const { startSessionCleanupJob } = await import('./jobs/session-cleanup.job.js');
+        startSessionCleanupJob();
+        logger.info('Stage 1: Session cleanup job started');
 
-logger.info('Background jobs scheduled successfully');
-logger.info('GNANI Backend application started.');
+        // Phase 4: Task queue worker is automatically started when imported
+        logger.info('Phase 4 task queue worker started');
 
-// Month-2: Register graceful shutdown handlers
-process.on('SIGTERM', () => {
-    logger.info('Received SIGTERM signal');
-    shutdownManager.shutdown('SIGTERM');
-});
+        logger.info('Background jobs scheduled successfully');
+        logger.info('GNANI Backend application started.');
 
-process.on('SIGINT', () => {
-    logger.info('Received SIGINT signal');
-    shutdownManager.shutdown('SIGINT');
-});
+        // Month-2: Register graceful shutdown handlers
+        process.on('SIGTERM', () => {
+            logger.info('Received SIGTERM signal');
+            shutdownManager.shutdown('SIGTERM');
+        });
 
-process.on('uncaughtException', (error) => {
-    logger.error('Uncaught Exception', { error: error.message, stack: error.stack });
-    shutdownManager.shutdown('UNCAUGHT_EXCEPTION');
-});
+        process.on('SIGINT', () => {
+            logger.info('Received SIGINT signal');
+            shutdownManager.shutdown('SIGINT');
+        });
 
-process.on('unhandledRejection', (reason, promise) => {
-    logger.error('Unhandled Rejection', { reason, promise });
-    shutdownManager.shutdown('UNHANDLED_REJECTION');
-});
+        process.on('uncaughtException', (error) => {
+            logger.error('Uncaught Exception', { error: error.message, stack: error.stack });
+            shutdownManager.shutdown('UNCAUGHT_EXCEPTION');
+        });
 
-logger.info('Graceful shutdown handlers registered');
+        process.on('unhandledRejection', (reason, promise) => {
+            logger.error('Unhandled Rejection', { reason, promise });
+            shutdownManager.shutdown('UNHANDLED_REJECTION');
+        });
+
+        logger.info('Graceful shutdown handlers registered');
 
     } catch (error: any) {
         logger.error('Failed to start application', { error: error.message, stack: error.stack });
         process.exit(1);
     }
 })();
-
 

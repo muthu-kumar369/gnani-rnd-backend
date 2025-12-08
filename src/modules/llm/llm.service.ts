@@ -166,8 +166,7 @@ Generate a title:`;
 
             const response = await retryWithBackoff(
                 () => axios.post(this.llmApiUrl + '/api/generate', requestBody, { headers }),
-                2, // Only 2 retries for title generation
-                500,
+                { maxRetries: 2, baseDelayMs: 500 }, // Only 2 retries for title generation
                 'Title Generation'
             );
 
@@ -292,7 +291,8 @@ Generate a title:`;
 
                     const response = await retryWithBackoff(
                         () => axios.post(this.llmApiUrl + '/api/generate', requestBody, { headers, responseType: 'stream' }),
-                        3, 1000, 'LLM Stream Request'
+                        { maxRetries: 3, baseDelayMs: 1000 },
+                        'LLM Stream Request'
                     );
 
                     // Text Stabilization Buffer
@@ -439,7 +439,8 @@ Generate a title:`;
                 } else {
                     const response = await retryWithBackoff(
                         () => axios.post(this.llmApiUrl + '/api/generate', requestBody, { headers }),
-                        3, 1000, 'LLM Request'
+                        { maxRetries: 3, baseDelayMs: 1000 },
+                        'LLM Request'
                     );
                     llmOutput = response.data.response;
 

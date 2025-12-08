@@ -5,6 +5,7 @@ import toolCache from '../../core/cache/tool-cache.service.js';
 import FEATURE_FLAGS from '../../config/feature-flags.js';
 import { Logger } from 'winston';
 import { toolQueue, toolQueueEvents } from '../../queues/tool.queue.js';
+import { CircuitBreaker } from '../../core/reliability/circuit-breaker.js';
 
 export class ToolExecutor {
     private logger: Logger;
@@ -19,10 +20,26 @@ export class ToolExecutor {
         ['system_info', 3000],   // 3s for system info
     ]);
     private pendingTools: Map<string, Set<string>> = new Map(); // sessionId -> Set of toolNames
+    private toolCircuitBreakers: Map<string, CircuitBreaker> = new Map(); // Stage 2
 
     constructor() {
         this.logger = createContextualLogger({ module: 'ToolExecutor' });
-        this.logger.info('ToolExecutor initialized with timeout protection');
+        this.logger.info('ToolExecutor initialized with timeout protection and circuit breakers');
+    }
+
+    // Stage 2: Get or create circuit breaker for a tool
+    private getCircuitBreaker(toolName: string): CircuitBreaker {
+        if (!this.toolCircuitBreakers.has(toolName)) {
+            this.toolCircuitBreakers.set(
+                toolName,
+                new CircuitBreaker(`Tool:${toolName}`, {
+                    failureThreshold: 3,
+                    resetTimeoutMs: 15000,
+                    requestTimeoutMs: 10000
+                })
+            );
+        }
+        return this.toolCircuitBreakers.get(toolName)!;
     }
 
     async executeTools(
@@ -62,26 +79,31 @@ export class ToolExecutor {
                 // Month-2: Track tool execution duration
                 const startTime = Date.now();
 
-                // NEW: Execute via Queue with timeout protection
+                // Stage 2: Get circuit breaker for this tool
+                const circuitBreaker = this.getCircuitBreaker(toolName);
+
+                // Execute via circuit breaker and queue
                 const timeout = this.toolTimeouts.get(toolName) || this.DEFAULT_TIMEOUT_MS;
 
-                // Add job to queue
-                const job = await toolQueue.add('execute-tool', {
-                    toolName,
-                    params: toolParams,
-                    sessionId
-                }, {
-                    removeOnComplete: true,
-                    removeOnFail: true // We handle errors via catch
+                const result = await circuitBreaker.execute(async () => {
+                    // Add job to queue
+                    const job = await toolQueue.add('execute-tool', {
+                        toolName,
+                        params: toolParams,
+                        sessionId
+                    }, {
+                        removeOnComplete: true,
+                        removeOnFail: true
+                    });
+
+                    this.logger.info(`Added tool execution job to queue`, { jobId: job.id, tool: toolName });
+
+                    // Wait for job completion with timeout
+                    return await Promise.race([
+                        job.waitUntilFinished(toolQueueEvents),
+                        this.createTimeout(timeout, toolName)
+                    ]);
                 });
-
-                this.logger.info(`Added tool execution job to queue`, { jobId: job.id, tool: toolName });
-
-                // Wait for job completion
-                const result = await Promise.race([
-                    job.waitUntilFinished(toolQueueEvents),
-                    this.createTimeout(timeout, toolName)
-                ]);
 
                 const duration = Date.now() - startTime;
 

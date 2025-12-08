@@ -7,44 +7,134 @@ import mongoose from 'mongoose';
 
 const router = express.Router();
 
-// Comprehensive health check
-router.get('/health', async (req: Request, res: Response) => {
-    const health = {
-        status: 'healthy',
-        timestamp: Date.now(),
-        uptime: process.uptime(),
-        checks: {
-            llm: false,
-            redis: false,
-            mongodb: false
-        }
+interface HealthStatus {
+    status: 'healthy' | 'degraded' | 'unhealthy';
+    timestamp: string;
+    uptime: number;
+    checks: {
+        [key: string]: {
+            status: 'up' | 'down';
+            latency?: number;
+            message?: string;
+        };
     };
+}
 
-    try {
-        // Check LLM
-        health.checks.llm = await llmManager.currentProvider.isAvailable();
-
-        // Check Redis
-        await redisClient.ping();
-        health.checks.redis = true;
-
-        // Check MongoDB
-        health.checks.mongodb = mongoose.connection.readyState === 1;
-
-        // Overall status
-        const allHealthy = Object.values(health.checks).every(v => v);
-        health.status = allHealthy ? 'healthy' : 'degraded';
-
-        logger.info('Health check', health);
-        res.status(allHealthy ? 200 : 503).json(health);
-    } catch (error: any) {
-        health.status = 'unhealthy';
-        logger.error('Health check failed', error);
-        res.status(503).json(health);
-    }
+/**
+ * GET /health
+ * Liveness probe - is the service running?
+ */
+router.get('/health', (req: Request, res: Response) => {
+    res.status(200).json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime()
+    });
 });
 
-// Readiness check (for load balancers)
+/**
+ * GET /health/ready
+ * Readiness probe - is the service ready to accept traffic?
+ */
+router.get('/health/ready', async (req: Request, res: Response) => {
+    const checks: HealthStatus['checks'] = {};
+    let overallStatus: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
+
+    // Check MongoDB
+    try {
+        const start = Date.now();
+        if (mongoose.connection.db) {
+            await mongoose.connection.db.admin().ping();
+            checks.mongodb = {
+                status: 'up',
+                latency: Date.now() - start
+            };
+        } else {
+            checks.mongodb = {
+                status: 'down',
+                message: 'MongoDB connection not established'
+            };
+            overallStatus = 'unhealthy';
+        }
+    } catch (error: any) {
+        checks.mongodb = {
+            status: 'down',
+            message: error.message
+        };
+        overallStatus = 'unhealthy';
+    }
+
+    // Check Redis
+    try {
+        const start = Date.now();
+        await redisClient.ping();
+        checks.redis = {
+            status: 'up',
+            latency: Date.now() - start
+        };
+    } catch (error: any) {
+        checks.redis = {
+            status: 'down',
+            message: error.message
+        };
+        overallStatus = overallStatus === 'unhealthy' ? 'unhealthy' : 'degraded';
+    }
+
+    // Check LLM service
+    try {
+        const start = Date.now();
+        const llmReady = await llmManager.currentProvider.isAvailable();
+        checks.llm = {
+            status: llmReady ? 'up' : 'down',
+            latency: Date.now() - start
+        };
+        if (!llmReady) {
+            overallStatus = overallStatus === 'unhealthy' ? 'unhealthy' : 'degraded';
+        }
+    } catch (error: any) {
+        checks.llm = {
+            status: 'down',
+            message: error.message
+        };
+        overallStatus = overallStatus === 'unhealthy' ? 'unhealthy' : 'degraded';
+    }
+
+    const statusCode = overallStatus === 'healthy' ? 200 : overallStatus === 'degraded' ? 200 : 503;
+
+    res.status(statusCode).json({
+        status: overallStatus,
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        checks
+    });
+});
+
+/**
+ * GET /health/detailed
+ * Detailed health information (admin only)
+ */
+router.get('/health/detailed', async (req: Request, res: Response) => {
+    const memUsage = process.memoryUsage();
+
+    res.json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        memory: {
+            rss: `${Math.round(memUsage.rss / 1024 / 1024)}MB`,
+            heapUsed: `${Math.round(memUsage.heapUsed / 1024 / 1024)}MB`,
+            heapTotal: `${Math.round(memUsage.heapTotal / 1024 / 1024)}MB`,
+            external: `${Math.round(memUsage.external / 1024 / 1024)}MB`
+        },
+        cpu: process.cpuUsage(),
+        nodejs: process.version,
+        pid: process.pid,
+        platform: process.platform,
+        arch: process.arch
+    });
+});
+
+// Legacy endpoints for backward compatibility
 router.get('/ready', async (req: Request, res: Response) => {
     try {
         const llmReady = await llmManager.currentProvider.isAvailable();
@@ -60,12 +150,10 @@ router.get('/ready', async (req: Request, res: Response) => {
     }
 });
 
-// Liveness check (for orchestrators)
 router.get('/live', (req: Request, res: Response) => {
     res.status(200).json({ alive: true });
 });
 
-// Legacy status endpoint
 router.get('/', (req: Request, res: Response) => {
     logger.info('Status endpoint hit');
     res.status(200).send('OK');

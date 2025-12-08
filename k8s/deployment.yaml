@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gnani-backend
+  labels:
+    app: gnani-backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: gnani-backend
+  template:
+    metadata:
+      labels:
+        app: gnani-backend
+    spec:
+      containers:
+      - name: backend
+        image: gnani-backend:latest
+        ports:
+        - containerPort: 3000
+          name: http
+        - containerPort: 50051
+          name: grpc
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: MONGODB_URI
+          valueFrom:
+            secretKeyRef:
+              name: gnani-secrets
+              key: mongodb-uri
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: gnani-config
+              key: redis-host
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: gnani-config
+              key: redis-port
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: gnani-secrets
+              key: jwt-secret
+        - name: LLM_SERVER_URL
+          valueFrom:
+            configMapKeyRef:
+              name: gnani-config
+              key: llm-server-url
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 15"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gnani-backend
+spec:
+  selector:
+    app: gnani-backend
+  ports:
+  - name: http
+    protocol: TCP
+    port: 3000
+    targetPort: 3000
+  - name: grpc
+    protocol: TCP
+    port: 50051
+    targetPort: 50051
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gnani-config
+data:
+  redis-host: "redis-service"
+  redis-port: "6379"
+  llm-server-url: "http://ollama-service:11434"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gnani-secrets
+type: Opaque
+stringData:
+  mongodb-uri: "mongodb://mongo-service:27017/gnani"
+  jwt-secret: "your-secret-key-here-change-in-production"

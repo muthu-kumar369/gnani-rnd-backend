@@ -5,11 +5,13 @@ import axios from 'axios';
 import crypto from 'crypto';
 import redisClient from '../../config/redis.config.js';
 import { BatchProcessor } from '../../core/batching/batch-processor.js';
+import { CircuitBreaker } from '../../core/reliability/circuit-breaker.js';
 
 class VectorManager {
     private client: ChromaClient | null = null;
     private collection: Collection | null = null;
     private batchProcessor: BatchProcessor<string, number[]>;
+    private chromaCircuitBreaker: CircuitBreaker; // Stage 2
 
     // Configuration
     private VECTOR_DB_HOST: string = process.env.VECTOR_DB_HOST || 'localhost';
@@ -23,6 +25,14 @@ class VectorManager {
 
     constructor() {
         this.TEI_URL = `http://${this.TEI_HOST}:${this.TEI_PORT}`;
+
+        // Stage 2: Initialize ChromaDB circuit breaker
+        this.chromaCircuitBreaker = new CircuitBreaker('ChromaDB', {
+            failureThreshold: 5,
+            resetTimeoutMs: 30000,
+            requestTimeoutMs: 15000
+        });
+
         // Initialize batch processor: max 32 items, 50ms delay
         this.batchProcessor = new BatchProcessor<string, number[]>(
             this.processEmbeddingBatch.bind(this),
@@ -132,47 +142,51 @@ class VectorManager {
         }
 
         try {
-            // Check cache first
-            const cacheKey = this.getCacheKey(userId, query, topK);
-            const cachedResults = await redisClient.get(cacheKey);
+            // Stage 2: Wrap with circuit breaker
+            return await this.chromaCircuitBreaker.execute(async () => {
+                // Check cache first
+                const cacheKey = this.getCacheKey(userId, query, topK);
+                const cachedResults = await redisClient.get(cacheKey);
 
-            if (cachedResults) {
-                const results = JSON.parse(cachedResults);
-                logger.debug(`Vector search - Cache HIT for query "${query.substring(0, 50)}..."`);
-                return results;
-            }
+                if (cachedResults) {
+                    const results = JSON.parse(cachedResults);
+                    logger.debug(`Vector search - Cache HIT for query "${query.substring(0, 50)}..."`);
+                    return results;
+                }
 
-            logger.debug(`Vector search - Cache MISS for query "${query.substring(0, 50)}..."`);
+                logger.debug(`Vector search - Cache MISS for query "${query.substring(0, 50)}..."`);
 
-            // Cache miss - generate embedding and search
-            const queryEmbedding = await this.generateEmbedding(query);
+                // Cache miss - generate embedding and search
+                const queryEmbedding = await this.generateEmbedding(query);
 
-            // Add timeout to vector search
-            const searchPromise = this.collection.query({
-                queryEmbeddings: [queryEmbedding],
-                nResults: topK,
-                where: { userId: userId },
+                // Add timeout to vector search
+                const searchPromise = this.collection!.query({
+                    queryEmbeddings: [queryEmbedding],
+                    nResults: topK,
+                    where: { userId: userId },
+                });
+
+                const timeoutPromise = new Promise<any>((_, reject) =>
+                    setTimeout(() => reject(new Error('Vector search timed out')), 2000)
+                );
+
+                const results = await Promise.race([searchPromise, timeoutPromise]);
+
+                let documents: string[] = [];
+                if (results.documents && results.documents.length > 0 && results.documents[0]) {
+                    documents = results.documents[0] as string[];
+                    logger.debug(`Retrieved ${documents.length} relevant embeddings for query "${query}"`);
+                }
+
+                // Cache results for 1 hour (3600 seconds)
+                await redisClient.setex(cacheKey, 3600, JSON.stringify(documents));
+                logger.debug(`Cached vector search results for query "${query.substring(0, 50)}..."`);
+
+                return documents;
             });
-
-            const timeoutPromise = new Promise<any>((_, reject) =>
-                setTimeout(() => reject(new Error('Vector search timed out')), 2000)
-            );
-
-            const results = await Promise.race([searchPromise, timeoutPromise]);
-
-            let documents: string[] = [];
-            if (results.documents && results.documents.length > 0 && results.documents[0]) {
-                documents = results.documents[0] as string[];
-                logger.debug(`Retrieved ${documents.length} relevant embeddings for query "${query}"`);
-            }
-
-            // Cache results for 1 hour (3600 seconds)
-            await redisClient.setex(cacheKey, 3600, JSON.stringify(documents));
-            logger.debug(`Cached vector search results for query "${query.substring(0, 50)}..."`);
-
-            return documents;
         } catch (error: any) {
             logger.error(`Error retrieving embeddings: ${error.message}`);
+            // Graceful degradation: return empty results
             return [];
         }
     }

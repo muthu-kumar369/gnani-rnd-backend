@@ -29,6 +29,23 @@ class Metrics {
     public audioBufferOverflow: client.Counter;
     public audioBufferWarning: client.Counter;
 
+    // Stage 2: Circuit breaker metrics
+    public circuitBreakerState: client.Gauge;
+    public circuitBreakerFailures: client.Gauge;
+    public circuitBreakerTrips: client.Counter;
+
+    // Stage 3: Error metrics
+    public errorCounter: client.Counter;
+
+    // Stage 6: HTTP size metrics
+    public httpRequestSize: client.Histogram;
+    public httpResponseSize: client.Histogram;
+
+    // Stage 7: Database metrics
+    public dbConnectionPoolSize: client.Gauge;
+    public dbQueryDuration: client.Histogram;
+    public dbOperationsTotal: client.Counter;
+
     constructor() {
         this.registry = new client.Registry();
         client.collectDefaultMetrics({ register: this.registry });
@@ -172,6 +189,76 @@ class Metrics {
             labelNames: ['session_id'],
         });
         this.registry.registerMetric(this.audioBufferWarning);
+
+        // Stage 2: Circuit breaker metrics
+        this.circuitBreakerState = new client.Gauge({
+            name: 'circuit_breaker_state',
+            help: 'Circuit breaker state (0=CLOSED, 1=HALF_OPEN, 2=OPEN)',
+            labelNames: ['circuit', 'state'],
+        });
+        this.registry.registerMetric(this.circuitBreakerState);
+
+        this.circuitBreakerFailures = new client.Gauge({
+            name: 'circuit_breaker_failures',
+            help: 'Number of failures in circuit breaker',
+            labelNames: ['circuit'],
+        });
+        this.registry.registerMetric(this.circuitBreakerFailures);
+
+        this.circuitBreakerTrips = new client.Counter({
+            name: 'circuit_breaker_trips_total',
+            help: 'Total number of times circuit breaker opened',
+            labelNames: ['circuit'],
+        });
+        this.registry.registerMetric(this.circuitBreakerTrips);
+
+        // Stage 3: Error metrics
+        this.errorCounter = new client.Counter({
+            name: 'error_total',
+            help: 'Total number of errors',
+            labelNames: ['code', 'category', 'severity'],
+        });
+        this.registry.registerMetric(this.errorCounter);
+
+        // Stage 6: HTTP size metrics
+        this.httpRequestSize = new client.Histogram({
+            name: 'http_request_size_bytes',
+            help: 'Size of HTTP requests in bytes',
+            labelNames: ['method', 'route'],
+            buckets: [100, 1000, 10000, 100000, 1000000],
+        });
+        this.registry.registerMetric(this.httpRequestSize);
+
+        this.httpResponseSize = new client.Histogram({
+            name: 'http_response_size_bytes',
+            help: 'Size of HTTP responses in bytes',
+            labelNames: ['method', 'route'],
+            buckets: [100, 1000, 10000, 100000, 1000000],
+        });
+        this.registry.registerMetric(this.httpResponseSize);
+
+        // Stage 7: Database metrics
+        this.dbConnectionPoolSize = new client.Gauge({
+            name: 'db_connection_pool_size',
+            help: 'Current database connection pool size',
+            labelNames: ['state'], // state: active, idle
+        });
+        this.registry.registerMetric(this.dbConnectionPoolSize);
+
+        this.dbQueryDuration = new client.Histogram({
+            name: 'db_query_duration_seconds',
+            help: 'Duration of database queries',
+            labelNames: ['operation', 'collection'],
+            buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1],
+        });
+        this.registry.registerMetric(this.dbQueryDuration);
+
+        this.dbOperationsTotal = new client.Counter({
+            name: 'db_operations_total',
+            help: 'Total number of database operations',
+            labelNames: ['operation', 'collection', 'status'],
+        });
+        this.registry.registerMetric(this.dbOperationsTotal);
 
         logger.info('Metrics initialized.');
     }

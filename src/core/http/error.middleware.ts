@@ -1,33 +1,87 @@
-// backend/src/utils/error_handler.ts
+// backend/src/core/http/error.middleware.ts
+// Stage 3: Enhanced error handler with metrics and classification
 import { Request, Response, NextFunction } from 'express';
-import logger from '../logger/logger.js';
+import { AppError, ErrorSeverity } from '../../shared/errors/error-types.js';
+import { createContextualLogger } from '../logger/logger.js';
+import metrics from '../monitoring/metrics.js';
 
-interface AppError extends Error {
-    statusCode?: number;
+const logger = createContextualLogger({ module: 'ErrorHandler' });
+
+export function errorHandler(
+    error: Error,
+    req: Request,
+    res: Response,
+    next: NextFunction
+) {
+    // Log error with context
+    const context = {
+        method: req.method,
+        path: req.path,
+        userId: (req as any).userId,
+        sessionId: (req as any).sessionId,
+        ip: req.ip
+    };
+
+    if (error instanceof AppError) {
+        logger.error(`${error.code}: ${error.message}`, { ...context, ...error.context });
+
+        // Increment error metrics
+        metrics.errorCounter.inc({
+            code: error.code,
+            category: error.category,
+            severity: error.severity
+        });
+
+        // Alert on critical errors
+        if (error.severity === ErrorSeverity.CRITICAL) {
+            // TODO: Send to alerting system (PagerDuty, Slack, etc.)
+            logger.error('CRITICAL ERROR DETECTED', { error: error.toJSON(), context });
+        }
+
+        // Return appropriate HTTP status
+        const statusCode = getHttpStatusCode(error);
+        return res.status(statusCode).json({
+            success: false,
+            error: {
+                code: error.code,
+                message: error.message,
+                severity: error.severity,
+                isRetryable: error.isRetryable
+            }
+        });
+    }
+
+    // Unknown error
+    logger.error(`Unhandled error: ${error.message}`, { ...context, stack: error.stack });
+    metrics.errorCounter.inc({ code: 'UNKNOWN_ERROR', category: 'SYSTEM', severity: 'HIGH' });
+
+    res.status(500).json({
+        success: false,
+        error: {
+            code: 'INTERNAL_ERROR',
+            message: 'An unexpected error occurred',
+            isRetryable: false
+        }
+    });
 }
 
-function errorHandler(err: any, req: Request, res: Response, next: NextFunction): void {
-    const statusCode = err.statusCode || 500;
-    const message = err.message || 'An unexpected error occurred';
-    
-    // Log the error with context
-    logger.error(`[${req.method}] ${req.originalUrl} - Error: ${message}`, {
-        stack: err.stack,
-        ip: req.ip,
-        statusCode,
-        userId: (req as any).userId // Log user ID if available
-    });
-
-    // Operational errors (trusted) vs Programmer errors (bugs)
-    // In production, don't leak stack traces for 500s
-    const isProduction = process.env.NODE_ENV === 'production';
-
-    res.status(statusCode).json({
-        status: 'error',
-        statusCode,
-        message: statusCode === 500 && isProduction ? 'Internal Server Error' : message,
-        ...(isProduction ? {} : { stack: err.stack })
-    });
+function getHttpStatusCode(error: AppError): number {
+    switch (error.category) {
+        case 'VALIDATION':
+            return 400;
+        case 'AUTHENTICATION':
+            return 401;
+        case 'AUTHORIZATION':
+            return 403;
+        case 'BUSINESS_LOGIC':
+            return 422;
+        case 'NETWORK':
+        case 'DATABASE':
+        case 'EXTERNAL_SERVICE':
+            return 503;
+        default:
+            return 500;
+    }
 }
 
 export default errorHandler;

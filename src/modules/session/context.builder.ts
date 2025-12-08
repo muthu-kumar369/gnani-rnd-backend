@@ -2,6 +2,9 @@
 import { createContextualLogger } from '../../core/logger/logger.js';
 import sessionMemory from '../memory/services/session-memory.service.js';
 import vectorManager from '../vector/vector.manager.js';
+import intentClassifier, { IntentClassification } from '../../core/nlp/intent-classifier.js';
+import promptSelector from '../../core/prompts/prompt-selector.js';
+import toolRegistry from '../../core/tools/tool-registry.js';
 import { Logger } from 'winston';
 
 interface Context {
@@ -10,6 +13,8 @@ interface Context {
     relevantMemories: string[];
     systemPrompt: string;
     attachments?: any[];
+    intent?: IntentClassification;
+    tools?: object[];
 }
 
 export class ContextBuilder {
@@ -56,22 +61,43 @@ export class ContextBuilder {
                 this.logger.info(`Injected ${attachments.length} file(s) into context`);
             }
 
-            // 4. Build system prompt
-            const systemPrompt = this.buildSystemPrompt(relevantMemories, customSystemPrompt);
+            // 4. Classify intent
+            this.logger.info(`Classifying intent for transcript...`);
+            const intent = await intentClassifier.classify(transcript, {
+                sessionId,
+                userId,
+                recentMessages: cachedMessages
+            });
+            this.logger.info(`Intent classified`, {
+                intent: intent.intent,
+                confidence: intent.confidence,
+                subIntent: intent.subIntent
+            });
+
+            // 5. Build system prompt with intent-specific guidance
+            const systemPrompt = this.buildSystemPrompt(relevantMemories, intent, customSystemPrompt);
+
+            // 6. Get tool schemas for LLM function calling
+            const tools = toolRegistry.getToolSchemas();
 
             const context: Context = {
                 transcript: enhancedTranscript,
                 recentMessages: cachedMessages.slice(-this.MAX_CONTEXT_MESSAGES),
                 relevantMemories,
                 systemPrompt,
-                attachments
+                attachments,
+                intent,
+                tools
             };
 
             this.logger.debug('Context built', {
                 sessionId,
                 messagesCount: context.recentMessages.length,
                 memoriesCount: relevantMemories.length,
-                attachmentsCount: attachments?.length || 0
+                attachmentsCount: attachments?.length || 0,
+                intent: intent.intent,
+                intentConfidence: intent.confidence,
+                toolsCount: tools.length
             });
 
             return context;
@@ -89,8 +115,12 @@ export class ContextBuilder {
         }
     }
 
-    private buildSystemPrompt(memories: string[], customPrompt?: string): string {
-        let prompt = customPrompt || 'You are Gnani, a helpful AI assistant.';
+    private buildSystemPrompt(memories: string[], intent: IntentClassification, customPrompt?: string): string {
+        // Base prompt
+        const basePrompt = customPrompt || 'You are Gnani, a helpful AI assistant.';
+
+        // Get intent-specific prompt
+        let prompt = promptSelector.getSystemPrompt(intent.intent, basePrompt);
         prompt += '\n\n';
 
         if (memories.length > 0) {
