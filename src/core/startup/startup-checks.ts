@@ -88,7 +88,7 @@ async function checkLLMService(): Promise<void> {
 function checkRequiredEnvVars(): Promise<void> {
     const required = [
         'MONGODB_URI',
-        'REDIS_HOST',
+        // 'REDIS_HOST', // Defaulting to localhost in config, so not strictly required in env
         'JWT_SECRET'
     ];
 

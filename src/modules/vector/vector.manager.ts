@@ -76,8 +76,17 @@ class VectorManager {
                 logger.warn(`ChromaDB heartbeat failed at ${chromaDbUrl}. Is the service running?`);
             }
 
+            // Dummy embedding function to avoid "Cannot instantiate... DefaultEmbeddingFunction" error
+            // We manually generate embeddings via TEI anyway, so this is just to satisfy Chroma's requirement
+            const dummyEmbeddingFunction = {
+                generate: async (texts: string[]) => {
+                    return texts.map(() => Array(384).fill(0));
+                }
+            };
+
             this.collection = await this.client.getOrCreateCollection({
                 name: this.COLLECTION_NAME,
+                embeddingFunction: dummyEmbeddingFunction,
                 metadata: {
                     'hnsw:space': 'cosine',
                     'hnsw:construction_ef': 200, // Higher = better recall
