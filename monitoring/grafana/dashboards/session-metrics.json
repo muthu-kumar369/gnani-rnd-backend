@@ -1,0 +1,86 @@
+{
+    "dashboard": {
+        "title": "Gnani Session Metrics",
+        "tags": [
+            "gnani",
+            "sessions"
+        ],
+        "timezone": "browser",
+        "schemaVersion": 16,
+        "version": 0,
+        "refresh": "10s",
+        "panels": [
+            {
+                "id": 1,
+                "title": "Active Sessions",
+                "type": "stat",
+                "gridPos": {
+                    "h": 6,
+                    "w": 8,
+                    "x": 0,
+                    "y": 0
+                },
+                "targets": [
+                    {
+                        "expr": "active_sessions_total",
+                        "refId": "A"
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "title": "Session Creation Rate",
+                "type": "graph",
+                "gridPos": {
+                    "h": 6,
+                    "w": 16,
+                    "x": 8,
+                    "y": 0
+                },
+                "targets": [
+                    {
+                        "expr": "rate(gnani_sessions_total[5m])",
+                        "legendFormat": "{{status}}",
+                        "refId": "A"
+                    }
+                ]
+            },
+            {
+                "id": 3,
+                "title": "Session Checkpoints",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 0,
+                    "y": 6
+                },
+                "targets": [
+                    {
+                        "expr": "rate(session_checkpoint_total[5m])",
+                        "legendFormat": "{{status}}",
+                        "refId": "A"
+                    }
+                ]
+            },
+            {
+                "id": 4,
+                "title": "Session Recovery",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 12,
+                    "y": 6
+                },
+                "targets": [
+                    {
+                        "expr": "rate(session_recovery_total[5m])",
+                        "legendFormat": "{{status}}",
+                        "refId": "A"
+                    }
+                ]
+            }
+        ]
+    }
+}

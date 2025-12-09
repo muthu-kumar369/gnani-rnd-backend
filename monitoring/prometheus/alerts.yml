@@ -37,3 +37,49 @@ groups:
         annotations:
           summary: "High memory usage"
           description: "Heap usage is {{ $value }} bytes (>1GB)"
+
+      # Additional critical alerts
+      - alert: LLMCircuitBreakerOpen
+        expr: llm_circuit_breaker_state == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "LLM circuit breaker is open"
+          description: "Circuit breaker for {{ $labels.model }} is open"
+
+      - alert: LowCacheHitRate
+        expr: rate(llm_cache_hit_total[10m]) / rate(llm_request_total[10m]) < 0.3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low cache hit rate"
+          description: "Cache hit rate is {{ $value | humanizePercentage }} (threshold: 30%)"
+
+      - alert: DatabaseConnectionPoolExhausted
+        expr: db_connection_pool_size >= db_connection_pool_max * 0.9
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database connection pool nearly exhausted"
+          description: "{{ $value }} connections in use"
+
+      - alert: HighSessionRecoveryFailures
+        expr: rate(session_recovery_total{status="failed"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High session recovery failure rate"
+          description: "{{ $value }} session recoveries failing per second"
+
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service is down"
+          description: "{{ $labels.job }} has been down for more than 1 minute"

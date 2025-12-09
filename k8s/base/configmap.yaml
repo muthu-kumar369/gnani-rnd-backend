@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gnani-config
+data:
+  NODE_ENV: "production"
+  LOG_LEVEL: "info"
+  PORT: "3001"
+  GRPC_PORT: "50051"
+  OLLAMA_BASE_URL: "http://ollama:11434"
+  CHROMADB_URL: "http://chromadb:8000"
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"

@@ -20,11 +20,26 @@ import { runStartupChecks } from './core/startup/startup-checks.js';
 
 import { templateService } from './modules/template/template.service.js';
 import { toolService } from './modules/tool/tool.service.js';
+// Stage 2: Vault service for secrets management
+import { vaultService } from './core/secrets/vault.service.js';
 
 // Initialize services
 (async () => {
     try {
         logger.info('Starting GNANI Backend application...');
+
+        // Stage 2: Initialize Vault for secrets management (before other services)
+        logger.info('Initializing Vault for secrets management...');
+        try {
+            await vaultService.initialize();
+            if (vaultService.isAvailable()) {
+                logger.info('✅ Vault initialized successfully');
+            } else {
+                logger.warn('⚠️  Vault not available, using .env fallback');
+            }
+        } catch (error: any) {
+            logger.warn(`Vault initialization failed: ${error.message}, using .env fallback`);
+        }
 
         // Connect to Redis
         try {

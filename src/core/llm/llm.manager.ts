@@ -2,6 +2,9 @@
 
 import { LLMProvider, GenerateOptions, LLMResponse, Tool } from './llm.interface.js';
 import { OllamaProvider } from './ollama.provider.js';
+import { LlamaCppProvider } from './providers/llamacpp.provider.js';
+import { VLLMProvider } from './providers/vllm.provider.js';
+import { LocalAIProvider } from './providers/localai.provider.js';
 import logger from '../logger/logger.js';
 
 export type TaskType = 'chat' | 'code' | 'planning' | 'tool';
@@ -11,14 +14,24 @@ export class LLMManager {
     public currentProvider: LLMProvider; // Made public for health checks
 
     constructor() {
-        // Initialize default provider
-        const defaultProvider = new OllamaProvider();
-        this.providers.set('ollama', defaultProvider);
-        this.currentProvider = defaultProvider;
+        // Initialize providers
+        const ollama = new OllamaProvider();
+        const llamaCpp = new LlamaCppProvider();
+        const vllm = new VLLMProvider();
+        const localAi = new LocalAIProvider();
+
+        this.providers.set('ollama', ollama);
+        this.providers.set('llamacpp', llamaCpp);
+        this.providers.set('vllm', vllm);
+        this.providers.set('localai', localAi);
+
+        // Select default provider based on env
+        const defaultProviderName = process.env.DEFAULT_LLM_PROVIDER || 'ollama';
+        this.currentProvider = this.providers.get(defaultProviderName) || ollama;
 
         logger.info('LLMManager initialized', {
             provider: this.currentProvider.name,
-            model: (this.currentProvider as OllamaProvider).getModel()
+            availableProviders: Array.from(this.providers.keys())
         });
     }
 

@@ -6,6 +6,7 @@ import {
   LOG_FILE_ERROR,
   LOG_FILE_COMBINED,
 } from "../../config/env.config.js";
+import { piiDetector } from "../security/pii-detector.service.js";
 
 const createBaseLogger = (defaultMeta: object = {}): Logger => {
   // Stage 5: JSON format for structured logging
@@ -54,7 +55,40 @@ const createBaseLogger = (defaultMeta: object = {}): Logger => {
 
 const logger: Logger = createBaseLogger();
 
-export const createContextualLogger = (context: object): Logger =>
-  createBaseLogger({ context });
+export const createContextualLogger = (context: object): Logger => {
+  const baseLogger = createBaseLogger({ context });
+
+  // SECURITY: Wrap logger methods to mask PII
+  const piiMaskingEnabled = process.env.PII_MASKING_ENABLED === 'true';
+
+  if (!piiMaskingEnabled) {
+    return baseLogger;
+  }
+
+  return {
+    ...baseLogger,
+    info: (message: string, metadata?: any) => {
+      const maskedMessage = piiDetector.maskPII(message);
+      const maskedMetadata = piiDetector.maskPIIInObject(metadata);
+      baseLogger.info(maskedMessage, maskedMetadata);
+    },
+    warn: (message: string, metadata?: any) => {
+      const maskedMessage = piiDetector.maskPII(message);
+      const maskedMetadata = piiDetector.maskPIIInObject(metadata);
+      baseLogger.warn(maskedMessage, maskedMetadata);
+    },
+    error: (message: string, metadata?: any) => {
+      const maskedMessage = piiDetector.maskPII(message);
+      const maskedMetadata = piiDetector.maskPIIInObject(metadata);
+      baseLogger.error(maskedMessage, maskedMetadata);
+    },
+    debug: (message: string, metadata?: any) => {
+      const maskedMessage = piiDetector.maskPII(message);
+      const maskedMetadata = piiDetector.maskPIIInObject(metadata);
+      baseLogger.debug(maskedMessage, maskedMetadata);
+    },
+  } as Logger;
+};
 
 export default logger;
+

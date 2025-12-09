@@ -7,7 +7,7 @@ import redisClient from '../../config/redis.config.js';
 import { BatchProcessor } from '../../core/batching/batch-processor.js';
 import { CircuitBreaker } from '../../core/reliability/circuit-breaker.js';
 
-class VectorManager {
+export class VectorManager {
     private client: ChromaClient | null = null;
     private collection: Collection | null = null;
     private batchProcessor: BatchProcessor<string, number[]>;
@@ -196,6 +196,53 @@ class VectorManager {
         } catch (error: any) {
             logger.error(`Error retrieving embeddings: ${error.message}`);
             // Graceful degradation: return empty results
+            return [];
+        }
+    }
+
+    /**
+     * Rich semantic search returning detailed results
+     */
+    async search(query: string, limit: number, filters: Record<string, any> = {}): Promise<Array<{ id: string; document: string; distance: number; metadata: any }>> {
+        if (!this.collection) {
+            logger.warn('ChromaDB not initialized. Cannot search.');
+            return [];
+        }
+
+        try {
+            return await this.chromaCircuitBreaker.execute(async () => {
+                const queryEmbedding = await this.generateEmbedding(query);
+
+                const where = Object.keys(filters).length > 0 ? filters : undefined;
+
+                const results = await this.collection!.query({
+                    queryEmbeddings: [queryEmbedding],
+                    nResults: limit,
+                    where: where,
+                });
+
+                const output: Array<{ id: string; document: string; distance: number; metadata: any }> = [];
+
+                if (results.ids && results.ids.length > 0 && results.ids[0]) {
+                    const ids = results.ids[0];
+                    const documents = results.documents?.[0] || [];
+                    const distances = results.distances?.[0] || [];
+                    const metadatas = results.metadatas?.[0] || [];
+
+                    for (let i = 0; i < ids.length; i++) {
+                        output.push({
+                            id: ids[i],
+                            document: documents[i] || '',
+                            distance: distances[i] || 0,
+                            metadata: metadatas[i] || {}
+                        });
+                    }
+                }
+
+                return output;
+            });
+        } catch (error: any) {
+            logger.error(`Error in vector search: ${error.message}`);
             return [];
         }
     }

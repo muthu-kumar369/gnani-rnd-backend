@@ -41,7 +41,7 @@ app.use(bodyParser.json());
 app.use(morgan('combined', { stream: { write: (message: string) => logger.info(message.trim()) } })); // Log HTTP requests
 
 // Routes
-app.use('/', healthRoutes); // Register health routes at root level (e.g. /health, /ready)
+app.use('/health', healthRoutes); // Register health routes (e.g. /health/live, /health/ready)
 app.use('/', metricsRoutes); // Stage 6: Prometheus metrics endpoint
 app.use('/api', apiRoutes);
 

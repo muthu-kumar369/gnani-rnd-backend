@@ -1,0 +1,31 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- ../../base/namespace.yaml
+- ../../base/configmap.yaml
+- ../../base/secrets.yaml
+- ../../base/services/backend-deployment.yaml
+- ../../base/services/backend-service.yaml
+- ../../base/services/mongodb-statefulset.yaml
+- ../../base/services/mongodb-service.yaml
+- ../../base/services/redis-deployment.yaml
+- ../../base/services/redis-service.yaml
+- ../../base/services/ollama-deployment.yaml
+- ../../base/services/ollama-service.yaml
+- ../../base/services/chromadb-deployment.yaml
+- ../../base/services/chromadb-service.yaml
+- ../../../monitoring/prometheus.yaml
+- ../../../monitoring/grafana.yaml
+- ../../../monitoring/jaeger.yaml
+- ../../base/ingress.yaml
+
+namespace: gnani-production
+
+commonLabels:
+  environment: production
+  managed-by: kustomize
+
+images:
+- name: gnani/backend
+  newTag: latest

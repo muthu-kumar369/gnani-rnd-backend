@@ -14,6 +14,15 @@ export const LLM_API_KEY: string = process.env.LLM_API_KEY || 'your_llm_api_key_
 export const LLM_MAX_TOKENS: number = parseInt(process.env.LLM_MAX_TOKENS || '200', 10);
 export const LLM_TEMPERATURE: number = parseFloat(process.env.LLM_TEMPERATURE || '0.7');
 export const LLM_STREAMING_ENABLED: boolean = (process.env.LLM_STREAMING_ENABLED === 'true');
+export const DEFAULT_LLM_PROVIDER: string = process.env.DEFAULT_LLM_PROVIDER || 'ollama';
+
+// Multi-Backend Configuration
+export const LLAMACPP_URL: string = process.env.LLAMACPP_URL || 'http://localhost:8080';
+export const VLLM_URL: string = process.env.VLLM_URL || 'http://localhost:8000/v1';
+export const VLLM_MODEL: string = process.env.VLLM_MODEL || 'facebook/opt-125m';
+export const VLLM_API_KEY: string = process.env.VLLM_API_KEY || 'EMPTY';
+export const LOCALAI_URL: string = process.env.LOCALAI_URL || 'http://localhost:8080/v1';
+export const LOCALAI_MODEL: string = process.env.LOCALAI_MODEL || 'gpt-4';
 export const MONGODB_URI: string = process.env.MONGODB_URI || 'mongodb://localhost:27017/gnani';
 export const JWT_SECRET: string = process.env.JWT_SECRET || 'supersecretjwtkey'; // Default for development
 export const JWT_ENCRYPTION_SECRET: string = process.env.JWT_ENCRYPTION_SECRET || 'supersecretjwtokencryptionkeylongenough'; // Used for encrypting refresh tokens

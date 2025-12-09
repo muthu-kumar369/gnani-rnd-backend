@@ -1,0 +1,87 @@
+{
+    "dashboard": {
+        "title": "Gnani Audio Pipeline",
+        "tags": [
+            "gnani",
+            "audio"
+        ],
+        "timezone": "browser",
+        "schemaVersion": 16,
+        "version": 0,
+        "refresh": "10s",
+        "panels": [
+            {
+                "id": 1,
+                "title": "Whisper Transcription Latency",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 0,
+                    "y": 0
+                },
+                "targets": [
+                    {
+                        "expr": "histogram_quantile(0.95, rate(gnani_stt_latency_ms_bucket[5m])) / 1000",
+                        "legendFormat": "p95",
+                        "refId": "A"
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "title": "Audio Quality (SNR)",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 12,
+                    "y": 0
+                },
+                "targets": [
+                    {
+                        "expr": "audio_quality_snr_db",
+                        "legendFormat": "{{session_id}}",
+                        "refId": "A"
+                    }
+                ]
+            },
+            {
+                "id": 3,
+                "title": "VAD Triggers",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 0,
+                    "y": 8
+                },
+                "targets": [
+                    {
+                        "expr": "rate(vad_trigger_total[5m])",
+                        "legendFormat": "{{session_id}}",
+                        "refId": "A"
+                    }
+                ]
+            },
+            {
+                "id": 4,
+                "title": "TTS Generation Time",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 12,
+                    "y": 8
+                },
+                "targets": [
+                    {
+                        "expr": "histogram_quantile(0.95, rate(tts_generation_duration_seconds_bucket[5m]))",
+                        "legendFormat": "p95",
+                        "refId": "A"
+                    }
+                ]
+            }
+        ]
+    }
+}

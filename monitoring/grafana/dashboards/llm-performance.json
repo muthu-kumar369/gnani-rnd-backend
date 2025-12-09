@@ -1,0 +1,215 @@
+{
+    "dashboard": {
+        "title": "Gnani LLM Performance",
+        "tags": [
+            "gnani",
+            "llm"
+        ],
+        "timezone": "browser",
+        "schemaVersion": 16,
+        "version": 0,
+        "refresh": "10s",
+        "panels": [
+            {
+                "id": 1,
+                "title": "LLM Request Rate",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 0,
+                    "y": 0
+                },
+                "targets": [
+                    {
+                        "expr": "rate(llm_request_total[5m])",
+                        "legendFormat": "{{model}} - {{status}}",
+                        "refId": "A"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "reqps",
+                        "label": "Requests/sec"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "title": "LLM Latency",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 12,
+                    "y": 0
+                },
+                "targets": [
+                    {
+                        "expr": "histogram_quantile(0.95, rate(gnani_llm_latency_ms_bucket[5m])) / 1000",
+                        "legendFormat": "p95",
+                        "refId": "A"
+                    },
+                    {
+                        "expr": "histogram_quantile(0.50, rate(gnani_llm_latency_ms_bucket[5m])) / 1000",
+                        "legendFormat": "p50",
+                        "refId": "B"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "s",
+                        "label": "Latency"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 3,
+                "title": "Token Usage",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 0,
+                    "y": 8
+                },
+                "targets": [
+                    {
+                        "expr": "rate(llm_tokens_total{type=\"input\"}[5m])",
+                        "legendFormat": "Input - {{model}}",
+                        "refId": "A"
+                    },
+                    {
+                        "expr": "rate(llm_tokens_total{type=\"output\"}[5m])",
+                        "legendFormat": "Output - {{model}}",
+                        "refId": "B"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "short",
+                        "label": "Tokens/sec"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 4,
+                "title": "Cache Hit Rate",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 12,
+                    "y": 8
+                },
+                "targets": [
+                    {
+                        "expr": "rate(gnani_cache_hits_total{cache_type=\"llm_response\"}[5m]) / (rate(gnani_cache_hits_total{cache_type=\"llm_response\"}[5m]) + rate(gnani_cache_misses_total{cache_type=\"llm_response\"}[5m]))",
+                        "legendFormat": "Cache Hit Rate",
+                        "refId": "A"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "percentunit",
+                        "label": "Hit Rate"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            },
+            {
+                "id": 5,
+                "title": "Circuit Breaker State",
+                "type": "stat",
+                "gridPos": {
+                    "h": 4,
+                    "w": 6,
+                    "x": 0,
+                    "y": 16
+                },
+                "targets": [
+                    {
+                        "expr": "circuit_breaker_state",
+                        "refId": "A"
+                    }
+                ],
+                "options": {
+                    "graphMode": "none",
+                    "colorMode": "background",
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "value": 0,
+                                "color": "green"
+                            },
+                            {
+                                "value": 1,
+                                "color": "yellow"
+                            },
+                            {
+                                "value": 2,
+                                "color": "red"
+                            }
+                        ]
+                    }
+                },
+                "mappings": [
+                    {
+                        "type": "value",
+                        "value": "0",
+                        "text": "CLOSED"
+                    },
+                    {
+                        "type": "value",
+                        "value": "1",
+                        "text": "HALF_OPEN"
+                    },
+                    {
+                        "type": "value",
+                        "value": "2",
+                        "text": "OPEN"
+                    }
+                ]
+            },
+            {
+                "id": 6,
+                "title": "Tokens Per Second",
+                "type": "graph",
+                "gridPos": {
+                    "h": 4,
+                    "w": 6,
+                    "x": 6,
+                    "y": 16
+                },
+                "targets": [
+                    {
+                        "expr": "rate(gnani_llm_tokens_per_second_sum[5m]) / rate(gnani_llm_tokens_per_second_count[5m])",
+                        "legendFormat": "Avg Tokens/sec",
+                        "refId": "A"
+                    }
+                ],
+                "yaxes": [
+                    {
+                        "format": "short",
+                        "label": "Tokens/sec"
+                    },
+                    {
+                        "format": "short"
+                    }
+                ]
+            }
+        ]
+    }
+}

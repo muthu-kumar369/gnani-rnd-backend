@@ -128,4 +128,56 @@ router.get('/user/:userId', async (req, res) => {
     }
 });
 
+
+/**
+ * Replay a session
+ * POST /api/session/:sessionId/replay
+ * Body: { speed?: number }
+ */
+import sessionReplayService from './session-replay.service.js';
+
+router.post('/:sessionId/replay', async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const { speed } = req.body;
+
+        // Trigger async replay
+        // Note: This effectively starts "playing" events. 
+        // In a real app, this might push events to a websocket or SSE channel.
+        // For this implementation, strictly following the service method which logs and emits events.
+        sessionReplayService.replaySession(sessionId, speed || 1.0, (event) => {
+            // Optional: could stream this back if response handling allowed, but this is a fire-and-forget trigger mostly
+            logger.debug(`Replaying event: ${event.type}`);
+        });
+
+        res.json({
+            success: true,
+            message: 'Session replay started'
+        });
+    } catch (error: any) {
+        logger.error(`Failed to start replay: ${error.message}`);
+        res.status(500).json({ success: false, error: 'Failed to start replay' });
+    }
+});
+
+/**
+ * Get session events for debugging
+ * GET /api/session/:sessionId/events
+ */
+router.get('/:sessionId/events', async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const events = await sessionReplayService.getEvents(sessionId);
+        
+        res.json({
+            success: true,
+            count: events.length,
+            events
+        });
+    } catch (error: any) {
+        logger.error(`Failed to get session events: ${error.message}`);
+        res.status(500).json({ success: false, error: 'Failed to get session events' });
+    }
+});
+
 export default router;

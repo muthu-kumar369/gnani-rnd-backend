@@ -46,6 +46,26 @@ class Metrics {
     public dbQueryDuration: client.Histogram;
     public dbOperationsTotal: client.Counter;
 
+    // Stage 1 Monitoring: Additional required metrics
+    public sessionCheckpointTotal: client.Counter;
+    public sessionRecoveryTotal: client.Counter;
+    public vectorSearchDuration: client.Histogram;
+    public embeddingGenerationDuration: client.Histogram;
+    public toolCacheHitTotal: client.Counter;
+    public rateLimitExceededTotal: client.Counter;
+    public llmRequestTotal: client.Counter;
+    public llmTokensTotal: client.Counter;
+    public ttsGenerationDuration: client.Histogram;
+    public audioQualitySNR: client.Gauge;
+    public vadTriggerTotal: client.Counter;
+    public memoryRetrievalTotal: client.Counter;
+    public summarizationTotal: client.Counter;
+    public grpcRequestTotal: client.Counter;
+    public grpcRequestDuration: client.Histogram;
+    public websocketConnectionsActive: client.Gauge;
+    public redisOperationDuration: client.Histogram;
+    public redisMemoryBytes: client.Gauge;
+
     constructor() {
         this.registry = new client.Registry();
         client.collectDefaultMetrics({ register: this.registry });
@@ -260,6 +280,134 @@ class Metrics {
         });
         this.registry.registerMetric(this.dbOperationsTotal);
 
+        // Stage 1 Monitoring: Additional metrics
+        this.sessionCheckpointTotal = new client.Counter({
+            name: 'session_checkpoint_total',
+            help: 'Total number of session checkpoints',
+            labelNames: ['session_id', 'status'],
+        });
+        this.registry.registerMetric(this.sessionCheckpointTotal);
+
+        this.sessionRecoveryTotal = new client.Counter({
+            name: 'session_recovery_total',
+            help: 'Total number of session recovery attempts',
+            labelNames: ['status'],
+        });
+        this.registry.registerMetric(this.sessionRecoveryTotal);
+
+        this.vectorSearchDuration = new client.Histogram({
+            name: 'vector_search_duration_seconds',
+            help: 'Duration of vector search operations',
+            labelNames: ['collection'],
+            buckets: [0.01, 0.05, 0.1, 0.5, 1, 2],
+        });
+        this.registry.registerMetric(this.vectorSearchDuration);
+
+        this.embeddingGenerationDuration = new client.Histogram({
+            name: 'embedding_generation_duration_seconds',
+            help: 'Duration of embedding generation',
+            buckets: [0.1, 0.5, 1, 2, 5],
+        });
+        this.registry.registerMetric(this.embeddingGenerationDuration);
+
+        this.toolCacheHitTotal = new client.Counter({
+            name: 'tool_cache_hit_total',
+            help: 'Total tool cache hits',
+            labelNames: ['tool_name'],
+        });
+        this.registry.registerMetric(this.toolCacheHitTotal);
+
+        this.rateLimitExceededTotal = new client.Counter({
+            name: 'rate_limit_exceeded_total',
+            help: 'Total rate limit exceeded events',
+            labelNames: ['endpoint'],
+        });
+        this.registry.registerMetric(this.rateLimitExceededTotal);
+
+        this.llmRequestTotal = new client.Counter({
+            name: 'llm_request_total',
+            help: 'Total LLM requests',
+            labelNames: ['model', 'status'],
+        });
+        this.registry.registerMetric(this.llmRequestTotal);
+
+        this.llmTokensTotal = new client.Counter({
+            name: 'llm_tokens_total',
+            help: 'Total tokens processed',
+            labelNames: ['model', 'type'],
+        });
+        this.registry.registerMetric(this.llmTokensTotal);
+
+        this.ttsGenerationDuration = new client.Histogram({
+            name: 'tts_generation_duration_seconds',
+            help: 'TTS generation duration',
+            buckets: [0.1, 0.5, 1, 2, 5],
+        });
+        this.registry.registerMetric(this.ttsGenerationDuration);
+
+        this.audioQualitySNR = new client.Gauge({
+            name: 'audio_quality_snr_db',
+            help: 'Audio quality SNR in dB',
+            labelNames: ['session_id'],
+        });
+        this.registry.registerMetric(this.audioQualitySNR);
+
+        this.vadTriggerTotal = new client.Counter({
+            name: 'vad_trigger_total',
+            help: 'Total VAD triggers',
+            labelNames: ['session_id'],
+        });
+        this.registry.registerMetric(this.vadTriggerTotal);
+
+        this.memoryRetrievalTotal = new client.Counter({
+            name: 'memory_retrieval_total',
+            help: 'Total memory retrievals',
+            labelNames: ['type'],
+        });
+        this.registry.registerMetric(this.memoryRetrievalTotal);
+
+        this.summarizationTotal = new client.Counter({
+            name: 'summarization_total',
+            help: 'Total summarization operations',
+            labelNames: ['type'],
+        });
+        this.registry.registerMetric(this.summarizationTotal);
+
+        this.grpcRequestTotal = new client.Counter({
+            name: 'grpc_request_total',
+            help: 'Total gRPC requests',
+            labelNames: ['method', 'status'],
+        });
+        this.registry.registerMetric(this.grpcRequestTotal);
+
+        this.grpcRequestDuration = new client.Histogram({
+            name: 'grpc_request_duration_seconds',
+            help: 'gRPC request duration',
+            labelNames: ['method'],
+            buckets: [0.01, 0.05, 0.1, 0.5, 1, 2],
+        });
+        this.registry.registerMetric(this.grpcRequestDuration);
+
+        this.websocketConnectionsActive = new client.Gauge({
+            name: 'websocket_connections_active',
+            help: 'Active WebSocket connections',
+        });
+        this.registry.registerMetric(this.websocketConnectionsActive);
+
+        this.redisOperationDuration = new client.Histogram({
+            name: 'redis_operation_duration_seconds',
+            help: 'Redis operation duration',
+            labelNames: ['operation'],
+            buckets: [0.001, 0.005, 0.01, 0.05, 0.1],
+        });
+        this.registry.registerMetric(this.redisOperationDuration);
+
+        this.redisMemoryBytes = new client.Gauge({
+            name: 'redis_memory_bytes',
+            help: 'Redis memory usage in bytes',
+        });
+        this.registry.registerMetric(this.redisMemoryBytes);
+
         logger.info('Metrics initialized.');
     }
 
@@ -349,6 +497,79 @@ class Metrics {
 
     incrementLLMCacheMiss(): void {
         this.cacheMissesTotal.inc({ cache_type: 'llm_response', tool: 'llm_service' });
+    }
+
+    // Stage 1 Monitoring: Helper methods
+    incrementSessionCheckpoint(sessionId: string, status: 'success' | 'failure'): void {
+        this.sessionCheckpointTotal.inc({ session_id: sessionId, status });
+    }
+
+    incrementSessionRecovery(status: 'success' | 'failed'): void {
+        this.sessionRecoveryTotal.inc({ status });
+    }
+
+    recordVectorSearch(duration: number, collection: string): void {
+        this.vectorSearchDuration.observe({ collection }, duration);
+    }
+
+    recordEmbeddingGeneration(duration: number): void {
+        this.embeddingGenerationDuration.observe(duration);
+    }
+
+    incrementToolCacheHit(toolName: string): void {
+        this.toolCacheHitTotal.inc({ tool_name: toolName });
+    }
+
+    incrementRateLimitExceeded(endpoint: string): void {
+        this.rateLimitExceededTotal.inc({ endpoint });
+    }
+
+    incrementLLMRequest(model: string, status: 'success' | 'failure'): void {
+        this.llmRequestTotal.inc({ model, status });
+    }
+
+    incrementLLMTokens(model: string, type: 'input' | 'output', count: number): void {
+        this.llmTokensTotal.inc({ model, type }, count);
+    }
+
+    recordTTSGeneration(duration: number): void {
+        this.ttsGenerationDuration.observe(duration);
+    }
+
+    setAudioQualitySNR(sessionId: string, snr: number): void {
+        this.audioQualitySNR.set({ session_id: sessionId }, snr);
+    }
+
+    incrementVADTrigger(sessionId: string): void {
+        this.vadTriggerTotal.inc({ session_id: sessionId });
+    }
+
+    incrementMemoryRetrieval(type: string): void {
+        this.memoryRetrievalTotal.inc({ type });
+    }
+
+    incrementSummarization(type: string): void {
+        this.summarizationTotal.inc({ type });
+    }
+
+    incrementGRPCRequest(method: string, status: number): void {
+        this.grpcRequestTotal.inc({ method, status: status.toString() });
+    }
+
+    recordGRPCDuration(method: string, duration: number): void {
+        this.grpcRequestDuration.observe({ method }, duration);
+    }
+
+    setWebSocketConnections(count: number): void {
+        this.websocketConnectionsActive.set(count);
+    }
+
+    recordRedisOperation(operation: string, duration: number): void {
+        this.redisOperationDuration.observe({ operation }, duration);
+    }
+
+    setRedisMemory(bytes: number): void {
+        this.redisMemoryBytes.set(bytes);
     }
 }
 

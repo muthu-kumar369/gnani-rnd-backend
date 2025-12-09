@@ -1,0 +1,87 @@
+{
+    "dashboard": {
+        "title": "Gnani Tool Execution",
+        "tags": [
+            "gnani",
+            "tools"
+        ],
+        "timezone": "browser",
+        "schemaVersion": 16,
+        "version": 0,
+        "refresh": "10s",
+        "panels": [
+            {
+                "id": 1,
+                "title": "Tool Execution Rate",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 0,
+                    "y": 0
+                },
+                "targets": [
+                    {
+                        "expr": "rate(gnani_tool_execution_duration_ms_count[5m])",
+                        "legendFormat": "{{tool_name}}",
+                        "refId": "A"
+                    }
+                ]
+            },
+            {
+                "id": 2,
+                "title": "Tool Execution Duration",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 12,
+                    "y": 0
+                },
+                "targets": [
+                    {
+                        "expr": "rate(gnani_tool_execution_duration_ms_sum[5m]) / rate(gnani_tool_execution_duration_ms_count[5m])",
+                        "legendFormat": "{{tool_name}}",
+                        "refId": "A"
+                    }
+                ]
+            },
+            {
+                "id": 3,
+                "title": "Tool Cache Hits",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 0,
+                    "y": 8
+                },
+                "targets": [
+                    {
+                        "expr": "rate(tool_cache_hit_total[5m])",
+                        "legendFormat": "{{tool_name}}",
+                        "refId": "A"
+                    }
+                ]
+            },
+            {
+                "id": 4,
+                "title": "Tool Success Rate",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 12,
+                    "y": 8
+                },
+                "targets": [
+                    {
+                        "expr": "rate(gnani_tool_execution_duration_ms_count{status=\"success\"}[5m]) / rate(gnani_tool_execution_duration_ms_count[5m])",
+                        "legendFormat": "{{tool_name}}",
+                        "refId": "A"
+                    }
+                ]
+            }
+        ]
+    }
+}
