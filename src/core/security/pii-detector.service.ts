@@ -1,7 +1,6 @@
 import { createContextualLogger } from '../logger/logger.js';
 import metrics from '../monitoring/metrics.js';
-
-const logger = createContextualLogger({ module: 'PIIDetector' });
+import { Logger } from 'winston';
 
 export interface PIIMatch {
     type: 'email' | 'phone' | 'ssn' | 'credit_card' | 'address' | 'ip_address';
@@ -12,6 +11,15 @@ export interface PIIMatch {
 }
 
 export class PIIDetectorService {
+    private logger: Logger | null = null;
+
+    private getLogger(): Logger {
+        if (!this.logger) {
+            this.logger = createContextualLogger({ module: 'PIIDetector' });
+        }
+        return this.logger;
+    }
+
     // Regex patterns for common PII
     private readonly patterns = {
         email: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g,

@@ -82,26 +82,30 @@ export class HybridSearchService {
         limit: number,
         filters: Record<string, any>
     ): Promise<SearchResult[]> {
-        // Tokenize query
-        const tokens = this.tokenize(query);
-        if (tokens.length === 0) return [];
+        // Use BM25 search service for better keyword matching
+        const { BM25SearchService } = await import('./bm25-search.service.js');
+        const bm25 = new BM25SearchService();
 
         // Get documents (from database or cache)
         const documents = await this.getDocuments(filters);
         if (documents.length === 0) return [];
 
-        // Calculate BM25 scores
-        const scores = documents.map(doc => ({
+        // Index documents for BM25
+        bm25.indexDocuments(documents.map(doc => ({
             id: doc.id,
             content: doc.content,
-            metadata: doc.metadata,
-            score: this.calculateBM25(tokens, doc.content, documents),
-        }));
+            metadata: doc.metadata
+        })));
 
-        // Sort by score and return top results
-        return scores
-            .sort((a, b) => b.score - a.score)
-            .slice(0, limit);
+        // Perform BM25 search
+        const results = bm25.search(query, limit);
+
+        return results.map(r => ({
+            id: r.id,
+            content: r.document.content,
+            metadata: r.document.metadata,
+            score: r.score,
+        }));
     }
 
     /**

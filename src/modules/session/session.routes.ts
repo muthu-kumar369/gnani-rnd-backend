@@ -2,15 +2,39 @@
 import { Router } from 'express';
 import sessionPersistence from './session.persistence.js';
 import { createContextualLogger } from '../../core/logger/logger.js';
+import { validate } from '../../middleware/zod.middleware.js';
+import { z } from 'zod';
 
 const router = Router();
 const logger = createContextualLogger({ module: 'SessionRoutes' });
+
+// Validation schemas
+const sessionIdParamSchema = z.object({
+    params: z.object({
+        sessionId: z.string().uuid('Invalid session ID format')
+    })
+});
+
+const userIdParamSchema = z.object({
+    params: z.object({
+        userId: z.string().uuid('Invalid user ID format')
+    })
+});
+
+const replayRequestSchema = z.object({
+    params: z.object({
+        sessionId: z.string().uuid('Invalid session ID format')
+    }),
+    body: z.object({
+        speed: z.number().min(0.1).max(10).optional()
+    })
+});
 
 /**
  * Export session state for migration
  * GET /api/session/:sessionId/export
  */
-router.get('/:sessionId/export', async (req, res) => {
+router.get('/:sessionId/export', validate(sessionIdParamSchema), async (req, res) => {
     try {
         const { sessionId } = req.params;
 
@@ -102,7 +126,7 @@ router.post('/import', async (req, res) => {
  * Get all active sessions for a user
  * GET /api/session/user/:userId
  */
-router.get('/user/:userId', async (req, res) => {
+router.get('/user/:userId', validate(userIdParamSchema), async (req, res) => {
     try {
         const { userId } = req.params;
 
@@ -136,7 +160,7 @@ router.get('/user/:userId', async (req, res) => {
  */
 import sessionReplayService from './session-replay.service.js';
 
-router.post('/:sessionId/replay', async (req, res) => {
+router.post('/:sessionId/replay', validate(replayRequestSchema), async (req, res) => {
     try {
         const { sessionId } = req.params;
         const { speed } = req.body;
@@ -164,11 +188,11 @@ router.post('/:sessionId/replay', async (req, res) => {
  * Get session events for debugging
  * GET /api/session/:sessionId/events
  */
-router.get('/:sessionId/events', async (req, res) => {
+router.get('/:sessionId/events', validate(sessionIdParamSchema), async (req, res) => {
     try {
         const { sessionId } = req.params;
         const events = await sessionReplayService.getEvents(sessionId);
-        
+
         res.json({
             success: true,
             count: events.length,

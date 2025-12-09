@@ -2,16 +2,27 @@
 import { Router } from 'express';
 import crossConversationMemory from './cross-conversation-memory.service.js';
 import { createContextualLogger } from '../../core/logger/logger.js';
+import { validate } from '../../middleware/zod.middleware.js';
+import { z } from 'zod';
 
 const router = Router();
 const logger = createContextualLogger({ module: 'MemoryRoutes' });
+
+// Validation schemas
+const relatedConversationsSchema = z.object({
+    body: z.object({
+        conversationId: z.string().uuid('Invalid conversation ID'),
+        userId: z.string().uuid('Invalid user ID'),
+        limit: z.number().int().min(1).max(20).optional()
+    })
+});
 
 /**
  * Find related conversations
  * POST /api/memory/related
  * Body: { conversationId: string, userId: string, limit?: number }
  */
-router.post('/related', async (req, res) => {
+router.post('/related', validate(relatedConversationsSchema), async (req, res) => {
     try {
         const { conversationId, userId, limit } = req.body;
 

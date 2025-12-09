@@ -2,12 +2,23 @@ import express from 'express';
 import sessionCoordinator from '../modules/session/session.coordinator.js';
 import { createContextualLogger } from '../core/logger/logger.js';
 import { authMiddleware, type CustomRequest } from '../core/security/auth.middleware.js';
+import { validate } from '../middleware/zod.middleware.js';
+import { z } from 'zod';
 
 const router = express.Router();
 const logger = createContextualLogger({ module: 'ChatRoutes' });
 
+// Zod schema for chat request
+const chatRequestSchema = z.object({
+    body: z.object({
+        message: z.string().min(1, 'Message cannot be empty').max(10000, 'Message too long'),
+        conversationId: z.string().uuid().optional(),
+        sessionId: z.string().uuid().optional(),
+    })
+});
+
 // HTTP Chat Endpoint for Mobile/Web clients (non-gRPC)
-router.post('/', authMiddleware, async (req: CustomRequest, res) => {
+router.post('/', authMiddleware, validate(chatRequestSchema), async (req: CustomRequest, res) => {
     const { message, conversationId, sessionId } = req.body; // Accept conversationId
     const userId = req.user?.id; // Extract userId from authenticated request
 

@@ -32,13 +32,28 @@ import { vaultService } from './core/secrets/vault.service.js';
         logger.info('Initializing Vault for secrets management...');
         try {
             await vaultService.initialize();
+
+            // Enforce Vault in production
+            if (process.env.NODE_ENV === 'production' && !vaultService.isAvailable()) {
+                logger.error('Vault is not available in production environment');
+                throw new Error('Cannot start application: Vault is required in production');
+            }
+
             if (vaultService.isAvailable()) {
                 logger.info('✅ Vault initialized successfully');
             } else {
-                logger.warn('⚠️  Vault not available, using .env fallback');
+                logger.warn('⚠️  Vault not available, using .env fallback (DEVELOPMENT ONLY)');
             }
         } catch (error: any) {
-            logger.warn(`Vault initialization failed: ${error.message}, using .env fallback`);
+            logger.error(`Vault initialization failed: ${error.message}`);
+
+            // Exit in production if Vault fails
+            if (process.env.NODE_ENV === 'production') {
+                logger.error('Exiting: Vault is required in production');
+                process.exit(1);
+            }
+
+            logger.warn('Using .env fallback (DEVELOPMENT ONLY)');
         }
 
         // Connect to Redis
@@ -54,10 +69,48 @@ import { vaultService } from './core/secrets/vault.service.js';
         // Connect to MongoDB
         await connectDB();
 
+        // Stage 4: Create database indexes for performance
+        try {
+            const { createDatabaseIndexes } = await import('./database/indexes.js');
+            await createDatabaseIndexes();
+            logger.info('Database indexes created successfully');
+        } catch (error: any) {
+            logger.warn('Failed to create database indexes', { error: error.message });
+            // Non-fatal, continue startup
+        }
+
         // Seed default templates
         await templateService.seedDefaults();
         // Seed default tools
         await toolService.seedDefaults();
+
+        // Stage 4: Initialize cache warming
+        try {
+            const cacheWarmingService = await import('./core/cache/cache-warming.service.js');
+            const { warmTemplatesStrategy, warmToolsStrategy, warmSystemConfigStrategy } =
+                await import('./core/cache/warming-strategies.js');
+
+            cacheWarmingService.default.registerStrategy(warmTemplatesStrategy);
+            cacheWarmingService.default.registerStrategy(warmToolsStrategy);
+            cacheWarmingService.default.registerStrategy(warmSystemConfigStrategy);
+            cacheWarmingService.default.start();
+
+            logger.info('Cache warming initialized');
+        } catch (error: any) {
+            logger.warn('Failed to initialize cache warming', { error: error.message });
+            // Non-fatal, continue startup
+        }
+
+        // Stage 4: Start memory monitoring
+        try {
+            const { MemoryMonitor } = await import('./core/monitoring/memory-monitor.js');
+            const memoryMonitor = new MemoryMonitor();
+            memoryMonitor.start();
+            logger.info('Memory monitoring started');
+        } catch (error: any) {
+            logger.warn('Failed to start memory monitoring', { error: error.message });
+            // Non-fatal, continue startup
+        }
 
         // Stage 4: Run startup checks
         logger.info('Running startup checks...');

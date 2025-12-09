@@ -7,6 +7,8 @@ import logger from "./core/logger/logger.js";
 import sessionCoordinator from "./modules/session/session.coordinator.js";
 import { fileURLToPath } from "url";
 import path from "path";
+import { createGrpcRateLimiter } from "./middleware/grpc-rate-limit.middleware.js";
+import { RATE_LIMIT_CONFIGS } from "./config/rate-limits.config.js";
 
 logger.debug("gRPC server module loaded and debug logging is active.");
 
@@ -25,11 +27,27 @@ const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
 });
 const gnani_proto = grpc.loadPackageDefinition(packageDefinition).gnani as any;
 
+// Create rate limiters for each endpoint type
+const sessionLimiter = createGrpcRateLimiter(RATE_LIMIT_CONFIGS.sessionManagement);
+const audioLimiter = createGrpcRateLimiter(RATE_LIMIT_CONFIGS.audioStream);
+
 // Implement gRPC service methods
 const StartSession = async (
   call: grpc.ServerUnaryCall<any, any>,
   callback: grpc.sendUnaryData<any>
 ): Promise<void> => {
+  // Apply rate limiting FIRST
+  try {
+    await sessionLimiter.checkUnaryRateLimit(call);
+  } catch (error: any) {
+    logger.warn('Rate limit exceeded for StartSession', {
+      peer: call.getPeer(),
+      error: error.message
+    });
+    callback(error);
+    return;
+  }
+
   logger.info("StartSession received call.request:", call.request);
   logger.info("StartSession received call.metadata:", call.metadata);
 
@@ -82,6 +100,16 @@ const StartSession = async (
 
 const SendAudioStream = (call: grpc.ServerDuplexStream<any, any>): void => {
   let currentSessionId: string | null = null;
+
+  // Apply rate limiting FIRST (async, non-blocking for stream)
+  audioLimiter.checkStreamRateLimit(call as any).catch(error => {
+    logger.warn('Rate limit exceeded for SendAudioStream', {
+      peer: call.getPeer(),
+      error: error.message
+    });
+    call.destroy(error);
+    return;
+  });
 
   const setCallForSession = (
     sessionId: string,
@@ -358,6 +386,18 @@ const EndSession = async (
   call: grpc.ServerUnaryCall<any, any>,
   callback: grpc.sendUnaryData<any>
 ): Promise<void> => {
+  // Apply rate limiting FIRST
+  try {
+    await sessionLimiter.checkUnaryRateLimit(call);
+  } catch (error: any) {
+    logger.warn('Rate limit exceeded for EndSession', {
+      peer: call.getPeer(),
+      error: error.message
+    });
+    callback(error);
+    return;
+  }
+
   const { session_id } = call.request;
 
   if (!session_id) {

@@ -21,10 +21,14 @@ import { traceAsyncOperation } from '../../core/monitoring/tracing.helper.js';
 import { contentFilter } from '../../core/security/content-filter.service.js';
 import { piiDetector } from '../../core/security/pii-detector.service.js';
 import { securityAudit } from '../../core/logger/security-audit.service.js';
+import deduplicationService from '../../core/cache/deduplication.service.js'; // Stage 4
 
 // Import LLM Manager
 import { llmManager } from '../../core/llm/llm.manager.js';
 import { Tool } from '../../core/llm/llm.interface.js';
+
+// TODO Stage 4: Wrap getLlmResponse cache check (line 181-192) with:
+// deduplicationService.deduplicate(dedupKey, async () => { /* cache check + LLM call */ }, 5*60*1000)
 
 class LlmService {
     private logger: Logger;
@@ -177,8 +181,33 @@ class LlmService {
                 }
             }
 
-            // Cache Check
             const cacheKey = this.generateCacheKey({ ...structuredPrompt, model: preferredModel });
+
+            // Stage 4: Deduplication for non-streaming requests only
+            if (!LLM_STREAMING_ENABLED || !onPartialResponse) {
+                return await deduplicationService.deduplicate(
+                    `llm:${cacheKey}`,
+                    async () => {
+                        // Check cache
+                        try {
+                            const cached = await redis.get(cacheKey);
+                            if (cached) {
+                                metrics.incrementLLMCacheHit();
+                                const response = JSON.parse(cached);
+                                if (onPartialResponse) await onPartialResponse({ type: 'complete_response', text: response.text } as any);
+                                return response;
+                            }
+                            metrics.incrementLLMCacheMiss();
+                        } catch (cacheError) { }
+
+                        // Execute LLM (rest of the method below)
+                        return await this.executeLlmInternal(structuredPrompt, onPartialResponse, preferredModel, cacheKey, sessionId, userId);
+                    },
+                    5 * 60 * 1000
+                );
+            }
+
+            // Streaming: check cache then execute
             try {
                 const cached = await redis.get(cacheKey);
                 if (cached) {
@@ -190,99 +219,110 @@ class LlmService {
                 metrics.incrementLLMCacheMiss();
             } catch (cacheError) { }
 
-            try {
-                const formattedPrompt = this._formatPromptForLLM(structuredPrompt);
-
-                // Unified Generation via LLMManager
-                return await this.circuitBreaker.execute(async () => {
-                    let llmOutput = '';
-                    let action = null;
-                    let tokenUsage: TokenUsage | undefined;
-
-                    latencyMonitor.startTimer(sessionId, 'llm_total');
-                    latencyMonitor.startTimer(sessionId, 'llm_ttft');
-                    let firstTokenReceived = false;
-
-                    const options = {
-                        model: this.getModelPath(preferredModel),
-                        maxTokens: LLM_MAX_TOKENS,
-                        temperature: 0.7,
-                        stream: LLM_STREAMING_ENABLED,
-                        stopSequences: ["User:", "System:", "Assistant:", "\nUser:", "\nAssistant:"]
-                    };
-
-                    const iterator = llmManager.generate(formattedPrompt, options);
-
-                    for await (const chunk of iterator) {
-                        const newContent = chunk.text;
-                        llmOutput += newContent;
-
-                        if (!firstTokenReceived && newContent.trim().length > 0) {
-                            latencyMonitor.endTimer(sessionId, 'llm_ttft');
-                            firstTokenReceived = true;
-                        }
-
-                        // Usage tracking
-                        if (chunk.usage) {
-                            tokenUsage = tokenCounterService.createUsage(
-                                chunk.usage.promptTokens,
-                                chunk.usage.completionTokens,
-                                options.model
-                            );
-                        }
-
-                        if (LLM_STREAMING_ENABLED && onPartialResponse && newContent) {
-                            // Directly stream what we get from provider
-                            // Removed complex stabilization buffer as providers handle decoding
-                            // Assuming providers emit valid strings
-                            // @ts-ignore
-                            await onPartialResponse({ type: 'partial', text: newContent });
-                        }
-                    }
-
-                    if (LLM_STREAMING_ENABLED && onPartialResponse) {
-                        // @ts-ignore
-                        await onPartialResponse({ type: 'final', text: '' }); // Final signal
-                    }
-
-                    latencyMonitor.endTimer(sessionId, 'llm_total');
-
-                    // Check for simple actions (heuristic)
-                    if (structuredPrompt.classified_intent === 'system_command') {
-                        action = { action: 'OPEN_APP', app_name: 'Terminal' };
-                    }
-
-                    metrics.incLlmCall(sessionId, structuredPrompt.classified_intent, 'success');
-                    auditService.logLlmEvent(userId, sessionId, structuredPrompt, { text: llmOutput, action }, 'success');
-
-                    // Cache response
-                    try {
-                        await redis.setex(cacheKey, 3600, JSON.stringify({ text: llmOutput, action }));
-                    } catch (e) { }
-
-                    // PII Masking
-                    if (process.env.PII_MASKING_ENABLED === 'true' && llmOutput) {
-                        llmOutput = piiDetector.maskPII(llmOutput);
-                    }
-
-                    return { text: llmOutput, action, tokenUsage };
-                });
-
-            } catch (error: any) {
-                this.logger.error(`Error in LlmService: ${error.message}`);
-                metrics.incLlmCall(sessionId, structuredPrompt.classified_intent, 'failure');
-                auditService.logLlmEvent(userId, sessionId, structuredPrompt, null, 'failure', error.message);
-                return {
-                    text: "I'm sorry, I'm having trouble connecting to my brain right now.",
-                    action: null
-                };
-            }
+            return await this.executeLlmInternal(structuredPrompt, onPartialResponse, preferredModel, cacheKey, sessionId, userId);
         }, {
             'session.id': sessionId,
             'user.id': userId,
             'intent': structuredPrompt.classified_intent,
             'model': preferredModel || 'default'
         });
+    }
+
+    private async executeLlmInternal(
+        structuredPrompt: any,
+        onPartialResponse: ((response: { text: string }) => Promise<void> | void) | null,
+        preferredModel: string | undefined,
+        cacheKey: string,
+        sessionId: string,
+        userId: string
+    ): Promise<{ text: string, action: any, tokenUsage?: TokenUsage }> {
+        try {
+            const formattedPrompt = this._formatPromptForLLM(structuredPrompt);
+
+            // Unified Generation via LLMManager
+            return await this.circuitBreaker.execute(async () => {
+                let llmOutput = '';
+                let action = null;
+                let tokenUsage: TokenUsage | undefined;
+
+                latencyMonitor.startTimer(sessionId, 'llm_total');
+                latencyMonitor.startTimer(sessionId, 'llm_ttft');
+                let firstTokenReceived = false;
+
+                const options = {
+                    model: this.getModelPath(preferredModel),
+                    maxTokens: LLM_MAX_TOKENS,
+                    temperature: 0.7,
+                    stream: LLM_STREAMING_ENABLED,
+                    stopSequences: ["User:", "System:", "Assistant:", "\nUser:", "\nAssistant:"]
+                };
+
+                const iterator = llmManager.generate(formattedPrompt, options);
+
+                for await (const chunk of iterator) {
+                    const newContent = chunk.text;
+                    llmOutput += newContent;
+
+                    if (!firstTokenReceived && newContent.trim().length > 0) {
+                        latencyMonitor.endTimer(sessionId, 'llm_ttft');
+                        firstTokenReceived = true;
+                    }
+
+                    // Usage tracking
+                    if (chunk.usage) {
+                        tokenUsage = tokenCounterService.createUsage(
+                            chunk.usage.promptTokens,
+                            chunk.usage.completionTokens,
+                            options.model
+                        );
+                    }
+
+                    if (LLM_STREAMING_ENABLED && onPartialResponse && newContent) {
+                        // Directly stream what we get from provider
+                        // Removed complex stabilization buffer as providers handle decoding
+                        // Assuming providers emit valid strings
+                        // @ts-ignore
+                        await onPartialResponse({ type: 'partial', text: newContent });
+                    }
+                }
+
+                if (LLM_STREAMING_ENABLED && onPartialResponse) {
+                    // @ts-ignore
+                    await onPartialResponse({ type: 'final', text: '' }); // Final signal
+                }
+
+                latencyMonitor.endTimer(sessionId, 'llm_total');
+
+                // Check for simple actions (heuristic)
+                if (structuredPrompt.classified_intent === 'system_command') {
+                    action = { action: 'OPEN_APP', app_name: 'Terminal' };
+                }
+
+                metrics.incLlmCall(sessionId, structuredPrompt.classified_intent, 'success');
+                auditService.logLlmEvent(userId, sessionId, structuredPrompt, { text: llmOutput, action }, 'success');
+
+                // Cache response
+                try {
+                    await redis.setex(cacheKey, 3600, JSON.stringify({ text: llmOutput, action }));
+                } catch (e) { }
+
+                // PII Masking
+                if (process.env.PII_MASKING_ENABLED === 'true' && llmOutput) {
+                    llmOutput = piiDetector.maskPII(llmOutput);
+                }
+
+                return { text: llmOutput, action, tokenUsage };
+            });
+
+        } catch (error: any) {
+            this.logger.error(`Error in LlmService: ${error.message}`);
+            metrics.incLlmCall(sessionId, structuredPrompt.classified_intent, 'failure');
+            auditService.logLlmEvent(userId, sessionId, structuredPrompt, null, 'failure', error.message);
+            return {
+                text: "I'm sorry, I'm having trouble connecting to my brain right now.",
+                action: null
+            };
+        }
     }
 
     private _formatPromptForLLM(structuredPrompt: any): string {

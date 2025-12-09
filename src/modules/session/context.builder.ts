@@ -77,14 +77,39 @@ export class ContextBuilder {
             // 5. Build system prompt with intent-specific guidance
             const systemPrompt = this.buildSystemPrompt(relevantMemories, intent, customSystemPrompt);
 
-            // 6. Get tool schemas for LLM function calling
+            // 6. Get cross-conversation context (NEW)
+            let crossConversationContext = '';
+            try {
+                this.logger.info(`Getting cross-conversation context...`);
+                const memoryLinking = await import('../memory/cross-conversation-memory.service.js');
+
+                // Get enriched context from related conversations
+                crossConversationContext = await memoryLinking.default.getEnrichedContext(
+                    sessionId,
+                    userId,
+                    transcript
+                );
+
+                if (crossConversationContext) {
+                    this.logger.info(`Added cross-conversation context from related conversations`);
+                }
+            } catch (error: any) {
+                this.logger.warn('Failed to get cross-conversation context', {
+                    error: error.message
+                });
+                // Continue without cross-conversation context
+            }
+
+            // 7. Get tool schemas for LLM function calling
             const tools = toolRegistry.getToolSchemas();
 
             const context: Context = {
                 transcript: enhancedTranscript,
                 recentMessages: cachedMessages.slice(-this.MAX_CONTEXT_MESSAGES),
                 relevantMemories,
-                systemPrompt,
+                systemPrompt: crossConversationContext
+                    ? systemPrompt + '\n\n' + crossConversationContext
+                    : systemPrompt,
                 attachments,
                 intent,
                 tools
@@ -97,7 +122,8 @@ export class ContextBuilder {
                 attachmentsCount: attachments?.length || 0,
                 intent: intent.intent,
                 intentConfidence: intent.confidence,
-                toolsCount: tools.length
+                toolsCount: tools.length,
+                hasCrossConversationContext: !!crossConversationContext
             });
 
             return context;

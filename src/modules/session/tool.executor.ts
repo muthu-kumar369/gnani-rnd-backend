@@ -6,6 +6,8 @@ import FEATURE_FLAGS from '../../config/feature-flags.js';
 import { Logger } from 'winston';
 import { toolQueue, toolQueueEvents } from '../../queues/tool.queue.js';
 import { CircuitBreaker } from '../../core/reliability/circuit-breaker.js';
+import { ParallelToolExecutor } from '../tool/parallel-executor.service.js'; // Stage 4: Parallel execution
+import { toolService } from '../tool/tool.service.js'; // Stage 4: For parallel executor
 
 export class ToolExecutor {
     private logger: Logger;
@@ -47,7 +49,36 @@ export class ToolExecutor {
         toolCalls: any[],
         onStatus?: (status: any) => Promise<void> | void
     ): Promise<any[]> {
+        // Stage 4: Use parallel execution when multiple tools requested
+        if (toolCalls.length > 1) {
+            this.logger.info(`Executing ${toolCalls.length} tools in parallel`, { sessionId });
+
+            try {
+                const parallelExecutor = new ParallelToolExecutor(toolService);
+                const toolCallsWithDeps = toolCalls.map((call, i) => ({
+                    id: `tool-${sessionId}-${i}`,
+                    name: call.name || call.tool,
+                    parameters: call.parameters || call.params,
+                    dependencies: []
+                }));
+
+                return await parallelExecutor.executeTools(toolCallsWithDeps);
+            } catch (error: any) {
+                this.logger.warn(`Parallel execution failed, using sequential`, {
+                    sessionId,
+                    error: error.message
+                });
+                // Fall through to sequential
+            }
+        }
+
+        // Sequential execution (single tool or fallback)
         const results = [];
+
+        // TODO Stage 4: Replace with parallel execution for 3x performance
+        // import { ParallelToolExecutor } from '../tool/parallel-executor.service.js';
+        // const parallelExecutor = new ParallelToolExecutor(toolService);
+        // return await parallelExecutor.executeTools(toolCallsWithDeps);
 
         for (const toolCall of toolCalls) {
             try {

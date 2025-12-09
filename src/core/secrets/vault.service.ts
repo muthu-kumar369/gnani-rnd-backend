@@ -33,8 +33,14 @@ export class VaultService {
             this.initialized = true;
         } catch (error: any) {
             logger.error('Failed to connect to Vault', { error: error.message });
-            logger.warn('Falling back to .env file for secrets');
-            // Don't throw - allow fallback to .env
+
+            // CHANGED: Only allow fallback in development
+            if (process.env.NODE_ENV === 'production') {
+                throw new Error('Vault is required in production environment');
+            }
+
+            logger.warn('Falling back to .env file for secrets (DEVELOPMENT ONLY)');
+            // Don't throw - allow fallback to .env in development
         }
     }
 

@@ -96,6 +96,42 @@ export class CrossConversationMemoryService {
             .filter(word => word.length > 4 && !stopWords.has(word))
             .slice(0, 10);
     }
+
+    /**
+     * Get enriched context from related conversations
+     */
+    async getEnrichedContext(
+        currentConversationId: string,
+        userId: string,
+        query: string
+    ): Promise<string> {
+        try {
+            // Find related conversations
+            const links = await this.findRelatedConversations(currentConversationId, userId, 3);
+
+            if (links.length === 0) {
+                return '';
+            }
+
+            // Build context from related conversations
+            const contextParts: string[] = [];
+            contextParts.push('## Related Context from Previous Conversations:');
+
+            for (const link of links) {
+                const summary = await this.getConversationSummary(link.conversationId);
+                if (summary) {
+                    contextParts.push(
+                        `\n**Related Topic** (${link.sharedTopics.slice(0, 3).join(', ')}):\n${summary.substring(0, 200)}...`
+                    );
+                }
+            }
+
+            return contextParts.join('\n');
+        } catch (error: any) {
+            logger.error(`Error getting enriched context: ${error.message}`);
+            return '';
+        }
+    }
 }
 
 // Export singleton

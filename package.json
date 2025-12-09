@@ -4,7 +4,15 @@
   "type": "module",
   "main": "dist/app.js",
   "scripts": {
-    "test": "node tests/unit/test.js && node tests/integration/grpc_client.js && node tests/integration/websocket_test.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest run --coverage",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "playwright test",
+    "test:benchmark": "vitest bench",
+    "lint": "tsc --noEmit",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "build": "tsc && copyfiles -u 1 \"src/**/*.proto\" dist && copyfiles -u 2 \"scripts/shell/*.py\" dist",
@@ -49,6 +57,7 @@
     "mongoose": "^8.20.1",
     "morgan": "^1.10.1",
     "multer": "^2.0.2",
+    "natural": "^6.10.0",
     "node-cache": "^5.1.2",
     "node-cron": "^4.2.1",
     "node-vault": "^0.10.9",
@@ -65,6 +74,7 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
+    "@playwright/test": "^1.40.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
@@ -73,13 +83,18 @@
     "@types/jsonwebtoken": "^9.0.6",
     "@types/moment": "^2.11.29",
     "@types/morgan": "^1.9.9",
+    "@types/natural": "^5.1.5",
     "@types/node": "^20.12.12",
     "@types/swagger-jsdoc": "^6.0.4",
     "@types/swagger-ui-express": "^4.1.8",
     "@types/uuid": "^9.0.8",
     "@types/validator": "^13.11.10",
+    "@vitest/coverage-v8": "^1.0.0",
+    "@vitest/ui": "^1.0.0",
     "copyfiles": "^2.4.1",
+    "supertest": "^6.3.3",
     "tsx": "^4.11.0",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "vitest": "^1.0.0"
   }
 }
