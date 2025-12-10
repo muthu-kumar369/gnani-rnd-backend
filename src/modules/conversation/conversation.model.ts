@@ -63,6 +63,18 @@ conversationSchema.index({ userId: 1, isDeleted: 1, updatedAt: -1 });
 // Text index for title search
 conversationSchema.index({ title: 'text' });
 
+// STAGE 12: Compound indexes for optimized queries
+conversationSchema.index({ userId: 1, updatedAt: -1 }); // List conversations sorted by date
+conversationSchema.index({ userId: 1, title: 'text' }); // Search conversations by title
+// Note: pinned field would need to be added to schema first
+// conversationSchema.index({ userId: 1, pinned: -1, updatedAt: -1 }); // Pinned conversations first
+
+// STAGE 27: Full-text search index
+conversationSchema.index({
+    title: 'text',
+    systemPrompt: 'text'
+});
+
 const Conversation = mongoose.model<IConversation>('Conversation', conversationSchema);
 
 export default Conversation;

@@ -643,6 +643,22 @@ export class SessionCoordinator {
                 this.logger.error(`[TRACE] [AUDIO-FLOW-ERROR] onLlmCompleteCallback NOT DEFINED for session ${sessionId}`);
             }
 
+            // Auto-generate title after first user-assistant exchange
+            try {
+                const messageCount = await ConversationMessage.countDocuments({
+                    conversationId: session.conversationId
+                });
+
+                if (messageCount === 2) { // First user message + first assistant response
+                    this.logger.info(`Triggering auto-title generation for conversation ${session.conversationId}`);
+                    const conversationService = (await import('../conversation/conversation.service.js')).default;
+                    conversationService.generateConversationTitle(session.conversationId, session.userId)
+                        .catch(err => this.logger.warn(`Auto-title generation failed: ${err.message}`));
+                }
+            } catch (err: any) {
+                this.logger.warn(`Failed to check message count for title generation: ${err.message}`);
+            }
+
             return { llmResponse: response.text };
 
         } catch (error: any) {

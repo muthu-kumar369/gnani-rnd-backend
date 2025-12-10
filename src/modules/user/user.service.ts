@@ -4,6 +4,7 @@ import { createContextualLogger } from '../../core/logger/logger.js';
 import auditService from '../../core/logger/audit.service.js';
 import cacheService from '../../core/cache/cache.service.js';
 import { Logger } from 'winston';
+import { redisClient } from '../../config/redis.config.js'; // STAGE 13
 
 export class UserService {
     private logger: Logger;
@@ -124,6 +125,19 @@ export class UserService {
     }
 
     async getUserPreferences(userId: string): Promise<any> {
+        // STAGE 13 Step 2: Check Redis cache first
+        const cacheKey = `user:${userId}:preferences`;
+        try {
+            const cached = await redisClient.get(cacheKey);
+            if (cached) {
+                this.logger.debug('Cache HIT for user preferences', { userId });
+                return JSON.parse(cached);
+            }
+            this.logger.debug('Cache MISS for user preferences', { userId });
+        } catch (error) {
+            this.logger.warn('Redis cache read failed for preferences', { error });
+        }
+
         const user = await User.findOne({ userId }).select('preferences');
         if (!user) {
             this.logger.warn(`User ${userId} not found when retrieving preferences.`);
@@ -132,7 +146,18 @@ export class UserService {
         }
         this.logger.info(`User preferences retrieved for user: ${userId}`);
         auditService.logEvent('USER_PREFERENCES_RETRIEVAL_SERVICE', userId, null, { action: 'getUserPreferences' }, 'success');
-        return user.preferences || {};
+
+        const preferences = user.preferences || {};
+
+        // STAGE 13: Cache the result (1 hour TTL)
+        try {
+            await redisClient.setex(cacheKey, 3600, JSON.stringify(preferences));
+            this.logger.debug('Cached user preferences', { userId, ttl: 3600 });
+        } catch (error) {
+            this.logger.warn('Failed to cache user preferences', { error });
+        }
+
+        return preferences;
     }
 
     async updateUserPreferences(userId: string, preferencesData: any): Promise<any> {
@@ -148,6 +173,14 @@ export class UserService {
         user.markModified('preferences');
 
         await user.save();
+
+        // STAGE 13: Invalidate Redis cache
+        try {
+            await redisClient.del(`user:${userId}:preferences`);
+            this.logger.debug('Invalidated user preferences cache', { userId });
+        } catch (error) {
+            this.logger.warn('Failed to invalidate preferences cache', { error });
+        }
 
         // Invalidate related caches
         await cacheService.del([

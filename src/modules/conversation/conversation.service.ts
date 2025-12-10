@@ -5,6 +5,7 @@ import shortTermMemory from '../memory/services/short-term-memory.service.js';
 import { createContextualLogger } from '../../core/logger/logger.js';
 import { Types } from 'mongoose';
 import sessionCoordinator from '../session/session.coordinator.js';
+import { redisClient } from '../../config/redis.config.js'; // STAGE 13
 
 interface PaginationOptions {
     page?: number;
@@ -16,51 +17,121 @@ interface PaginationOptions {
 class ConversationService {
     private logger = createContextualLogger({ module: 'ConversationService' });
     /**
-     * List conversations for a user
+     * List conversations for a user (STAGE 12: Optimized with aggregation pipeline)
      */
     async listConversations(userId: string, options: PaginationOptions = {}) {
         const page = Math.max(1, options.page || 1);
         const limit = Math.max(1, Math.min(50, options.limit || 20));
         const skip = (page - 1) * limit;
 
-        const sort: any = {};
         const sortBy = options.sortBy || 'updatedAt';
         const sortOrder = options.sortOrder === 'asc' ? 1 : -1;
-        sort[sortBy] = sortOrder;
 
-        const query = { userId, isDeleted: false };
+        // STAGE 13 Step 1: Check Redis cache first
+        const cacheKey = `conversations:${userId}:page${page}:limit${limit}`;
+        try {
+            const cached = await redisClient.get(cacheKey);
+            if (cached) {
+                this.logger.debug('Cache HIT for conversations list', { userId, page });
+                return JSON.parse(cached);
+            }
+            this.logger.debug('Cache MISS for conversations list', { userId, page });
+        } catch (error) {
+            this.logger.warn('Redis cache read failed, continuing without cache', { error });
+        }
 
-        const [conversations, total] = await Promise.all([
-            Conversation.find(query)
-                .sort(sort)
-                .skip(skip)
-                .limit(limit)
-                .lean(),
-            Conversation.countDocuments(query)
+        // STAGE 12 Step 3: Query explain for performance analysis (development only)
+        if (process.env.NODE_ENV === 'development') {
+            // Get query explanation for performance monitoring
+            const explain = await Conversation.find({ userId, isDeleted: false })
+                .sort({ [sortBy]: sortOrder })
+                .explain('executionStats') as any;
+
+            this.logger.info('Query performance', {
+                executionTimeMs: explain.executionStats?.executionTimeMillis,
+                totalDocsExamined: explain.executionStats?.totalDocsExamined,
+                totalKeysExamined: explain.executionStats?.totalKeysExamined,
+            });
+        }
+
+        // STAGE 12 Step 2: Optimized aggregation pipeline with $lookup
+        const conversations = await Conversation.aggregate([
+            // Match user's active conversations
+            { $match: { userId, isDeleted: false } },
+
+            // Sort by updatedAt (or pinned if field exists)
+            { $sort: { [sortBy]: sortOrder } },
+
+            // Pagination
+            { $skip: skip },
+            { $limit: limit },
+
+            // Lookup last message from ConversationMessage collection
+            {
+                $lookup: {
+                    from: 'conversationmessages',
+                    let: { convId: '$conversationId' },
+                    pipeline: [
+                        { $match: { $expr: { $eq: ['$conversationId', '$$convId'] } } },
+                        { $sort: { timestamp: -1 } },
+                        { $limit: 1 },
+                        { $project: { content: 1, timestamp: 1 } }
+                    ],
+                    as: 'lastMessage'
+                }
+            },
+
+            // Project final shape
+            {
+                $project: {
+                    _id: 1,
+                    conversationId: 1,
+                    title: 1,
+                    updatedAt: 1,
+                    createdAt: 1,
+                    currentModel: 1,
+                    currentTemplate: 1,
+                    preview: {
+                        $cond: {
+                            if: { $gt: [{ $size: '$lastMessage' }, 0] },
+                            then: { $substr: [{ $arrayElemAt: ['$lastMessage.content', 0] }, 0, 100] },
+                            else: ''
+                        }
+                    },
+                    lastMessageAt: {
+                        $cond: {
+                            if: { $gt: [{ $size: '$lastMessage' }, 0] },
+                            then: { $arrayElemAt: ['$lastMessage.timestamp', 0] },
+                            else: '$updatedAt'
+                        }
+                    }
+                }
+            }
         ]);
 
-        // Fetch preview (last message) for each conversation
-        const conversationsWithPreview = await Promise.all(conversations.map(async (conv) => {
-            const lastMessage = await ConversationMessage.findOne({ conversationId: conv.conversationId })
-                .sort({ timestamp: -1 })
-                .select('content timestamp')
-                .lean();
+        // Get total count for pagination
+        const total = await Conversation.countDocuments({ userId, isDeleted: false });
 
-            return {
+        const result = {
+            conversations: conversations.map(conv => ({
                 ...conv,
-                id: conv._id,
-                preview: lastMessage ? lastMessage.content.substring(0, 100) : '',
-                lastMessageAt: lastMessage ? lastMessage.timestamp : conv.updatedAt
-            };
-        }));
-
-        return {
-            conversations: conversationsWithPreview,
+                id: conv._id
+            })),
             total,
             page,
             limit,
             hasMore: total > skip + limit
         };
+
+        // STAGE 13: Cache the result (5 min TTL)
+        try {
+            await redisClient.setex(cacheKey, 300, JSON.stringify(result));
+            this.logger.debug('Cached conversations list', { userId, page, ttl: 300 });
+        } catch (error) {
+            this.logger.warn('Failed to cache conversations list', { error });
+        }
+
+        return result;
     }
 
     /**
@@ -176,11 +247,25 @@ class ConversationService {
             }
 
             // Soft delete conversation
-            return Conversation.findOneAndUpdate(
+            const result = await Conversation.findOneAndUpdate(
                 { conversationId, userId },
                 { isDeleted: true },
                 { new: true }
             );
+
+            // STAGE 13 Step 3: Invalidate cache after deletion
+            try {
+                // Invalidate all pages of conversation list for this user
+                const keys = await redisClient.keys(`conversations:${userId}:*`);
+                if (keys.length > 0) {
+                    await redisClient.del(...keys);
+                    this.logger.debug('Invalidated conversation list cache after deletion', { userId, conversationId });
+                }
+            } catch (error) {
+                this.logger.warn('Failed to invalidate cache after deletion', { error });
+            }
+
+            return result;
         } catch (error: any) {
             console.error('Error deleting conversation:', error);
             throw error;

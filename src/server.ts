@@ -3,6 +3,7 @@ import http from 'http';
 import express, { Application, Request, Response } from 'express';
 import bodyParser from 'body-parser';
 import morgan from 'morgan';
+import compression from 'compression'; // STAGE 14
 import { PORT } from './config/env.config.js'; // Use PORT from config
 import logger from './core/logger/logger.js'; // Updated path for logger
 import apiRoutes from './routes/index.js'; // Import consolidated routes from src/routes/index.js
@@ -31,6 +32,20 @@ app.use(requestIdMiddleware);
 
 // Stage 6: Metrics middleware for HTTP tracking
 app.use(metricsMiddleware);
+
+// STAGE 14 Step 3: Response compression
+app.use(compression({
+    filter: (req, res) => {
+        // Don't compress if client explicitly requests no compression
+        if (req.headers['x-no-compression']) {
+            return false;
+        }
+        // Use default compression filter
+        return compression.filter(req, res);
+    },
+    level: 6, // Compression level (0-9, 6 is default)
+    threshold: 1024 // Only compress responses larger than 1KB
+}));
 
 // Middleware
 app.use(globalRateLimiter); // Apply global rate limiting first

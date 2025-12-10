@@ -1,50 +1,13 @@
-// src/modules/search/search.routes.ts
-import { Router } from 'express';
-import hybridSearchService from './hybrid-search.service.js';
-import Conversation from '../conversation/conversation.model.js';
-import { authMiddleware, type CustomRequest } from '../../core/security/auth.middleware.js';
-import { createContextualLogger } from '../../core/logger/logger.js';
+import { Router, Request, Response } from 'express';
+import Conversation from '../modules/conversation/conversation.model.js';
+import { authMiddleware, type CustomRequest } from '../core/security/auth.middleware.js';
+import { createContextualLogger } from '../core/logger/logger.js';
 
 const router = Router();
 const logger = createContextualLogger({ module: 'SearchRoutes' });
 
-/**
- * Hybrid Search
- * POST /api/search/hybrid
- * Body: { query: string, limit?: number, filters?: object }
- */
-router.post('/hybrid', async (req, res) => {
-    try {
-        const { query, limit, filters, semanticWeight, keywordWeight } = req.body;
-
-        if (!query) {
-            return res.status(400).json({ success: false, error: 'Query is required' });
-        }
-
-        const results = await hybridSearchService.search(query, {
-            limit: limit || 10,
-            filters: filters || {},
-            semanticWeight,
-            keywordWeight
-        });
-
-        res.json({
-            success: true,
-            count: results.length,
-            data: results
-        });
-    } catch (error: any) {
-        logger.error(`Search failed: ${error.message}`);
-        res.status(500).json({ success: false, error: 'Search failed' });
-    }
-});
-
-/**
- * STAGE 27: Advanced Search with Filters
- * POST /api/search
- * Body: { query: string, filters?: { dateFrom, dateTo, model, folder } }
- */
-router.post('/', authMiddleware, async (req: CustomRequest, res) => {
+// POST /api/search - Advanced search with filters
+router.post('/', authMiddleware, async (req: CustomRequest, res: Response) => {
     try {
         const userId = req.user?.id;
         const { query, filters = {} } = req.body;
@@ -90,7 +53,7 @@ router.post('/', authMiddleware, async (req: CustomRequest, res) => {
 
         // Format results
         const results = conversations.map((conv: any) => {
-            // Get best snippet from system prompt or title
+            // Get snippet from system prompt or title
             const snippet = conv.systemPrompt?.substring(0, 150) + '...' || conv.title?.substring(0, 150) + '...' || 'No preview available';
 
             return {
@@ -106,12 +69,10 @@ router.post('/', authMiddleware, async (req: CustomRequest, res) => {
         logger.info(`Search completed: "${query}" - ${results.length} results`);
 
         res.json({ results });
-    } catch (error: any) {
-        logger.error('Search failed', error);
+    } catch (error) {
+        logger.error('Search failed', error as Error);
         res.status(500).json({ error: 'Search failed' });
     }
 });
 
 export default router;
-
-

@@ -34,6 +34,9 @@ router.delete('/:id', conversationController.deleteConversation);
 // Update title
 router.patch('/:id/title', validate(updateConversationTitleSchema), conversationController.updateTitle);
 
+// Generate title automatically
+router.post('/:id/title/generate', conversationController.generateTitle);
+
 // Regenerate response
 router.post('/:id/regenerate', conversationController.regenerateResponse);
 

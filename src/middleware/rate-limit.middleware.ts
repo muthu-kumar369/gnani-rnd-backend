@@ -17,7 +17,7 @@ export const globalRateLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 300,
     standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+    legacyHeaders: true, // STAGE 19: Enable the `X-RateLimit-*` headers for frontend
     store: createRedisStore(),
     handler: (req, res, next, options) => {
         logger.warn(`Global rate limit exceeded for IP: ${req.ip}`);

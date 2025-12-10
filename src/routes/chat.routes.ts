@@ -4,6 +4,7 @@ import { createContextualLogger } from '../core/logger/logger.js';
 import { authMiddleware, type CustomRequest } from '../core/security/auth.middleware.js';
 import { validate } from '../middleware/zod.middleware.js';
 import { z } from 'zod';
+import { trackTokenUsage, trackEvent } from '../middleware/analytics.middleware.js'; // STAGE 20
 
 const router = express.Router();
 const logger = createContextualLogger({ module: 'ChatRoutes' });
@@ -49,12 +50,21 @@ router.post('/', authMiddleware, validate(chatRequestSchema), async (req: Custom
     try {
         logger.info(`Processing HTTP chat request for conversation ${currentConversationId} (session ${currentSessionId})`);
 
+        // STAGE 20: Track message sent event
+        const startTime = Date.now();
+        await trackEvent(userId, 'message_sent', { conversationId: currentConversationId }, currentConversationId);
+
         // Process text input via Coordinator
         const response = await sessionCoordinator.processTextInput(currentSessionId, message);
 
         if (!response) {
             return res.status(500).json({ error: 'Failed to process message' });
         }
+
+        // STAGE 20: Track token usage (estimate if not available)
+        const duration = Date.now() - startTime;
+        const estimatedTokens = Math.ceil((message.length + (response.llmResponse?.length || 0)) / 4); // Rough estimate
+        await trackTokenUsage(userId, currentConversationId, estimatedTokens, 'gpt-3.5-turbo', duration);
 
         res.json({
             conversationId: currentConversationId, // Return conversationId

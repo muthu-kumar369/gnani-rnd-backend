@@ -50,17 +50,42 @@ export function errorHandler(
         });
     }
 
+    // STAGE 17: Map errors to specific error codes for frontend
+    let errorCode = 'UNKNOWN_ERROR';
+    let statusCode = 500;
+    let message = error.message || 'An unexpected error occurred';
+
+    // Determine error code based on error type
+    if (error.name === 'ValidationError') {
+        errorCode = 'VALIDATION_ERROR';
+        statusCode = 400;
+    } else if (error.name === 'UnauthorizedError' || error.message?.includes('unauthorized')) {
+        errorCode = 'AUTH_EXPIRED';
+        statusCode = 401;
+    } else if (error.message?.includes('rate limit')) {
+        errorCode = 'RATE_LIMIT_EXCEEDED';
+        statusCode = 429;
+    } else if (error.message?.includes('not found')) {
+        errorCode = 'CONVERSATION_NOT_FOUND';
+        statusCode = 404;
+    } else if (error.message?.includes('timeout')) {
+        errorCode = 'TIMEOUT_ERROR';
+        statusCode = 504;
+    } else if (error.message?.includes('network')) {
+        errorCode = 'NETWORK_ERROR';
+        statusCode = 503;
+    }
+
     // Unknown error
     logger.error(`Unhandled error: ${error.message}`, { ...context, stack: error.stack });
-    metrics.errorCounter.inc({ code: 'UNKNOWN_ERROR', category: 'SYSTEM', severity: 'HIGH' });
+    metrics.errorCounter.inc({ code: errorCode, category: 'SYSTEM', severity: 'HIGH' });
 
-    res.status(500).json({
+    // STAGE 17: Send structured error response with errorCode
+    res.status(statusCode).json({
         success: false,
-        error: {
-            code: 'INTERNAL_ERROR',
-            message: 'An unexpected error occurred',
-            isRetryable: false
-        }
+        errorCode,
+        message,
+        ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
     });
 }
 

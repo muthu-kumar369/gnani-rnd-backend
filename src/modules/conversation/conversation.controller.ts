@@ -115,6 +115,21 @@ class ConversationController {
         }
     }
 
+    async generateTitle(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { id } = req.params;
+
+            const title = await conversationService.generateConversationTitle(id, userId);
+
+            res.json({ title });
+        } catch (error: any) {
+            console.error('Error generating title:', error);
+            res.status(500).json({ error: error.message || 'Internal Server Error' });
+        }
+    }
     async regenerateResponse(req: AuthenticatedRequest, res: Response) {
         try {
             const userId = req.user?.id;
