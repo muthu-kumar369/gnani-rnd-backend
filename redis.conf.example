@@ -1,0 +1,14 @@
+# STAGE 1: Redis Configuration for LRU Eviction
+# Add to your .env or docker-compose.yml
+
+# Redis eviction policy - use allkeys-lru for general cache
+# Options: noeviction, allkeys-lru, volatile-lru, allkeys-random, volatile-random, volatile-ttl
+REDIS_MAXMEMORY=256mb
+REDIS_MAXMEMORY_POLICY=allkeys-lru
+
+# If using docker-compose.yml:
+# redis:
+#   image: redis:7-alpine
+#   command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+#   ports:
+#     - "6379:6379"

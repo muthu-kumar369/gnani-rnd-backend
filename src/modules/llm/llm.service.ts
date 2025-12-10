@@ -3,13 +3,7 @@ import { createContextualLogger } from '../../core/logger/logger.js';
 import metrics from '../../core/monitoring/metrics.js';
 import auditService from '../../core/logger/audit.service.js';
 import latencyMonitor from '../../core/monitoring/latency.monitor.js';
-import {
-    LLM_MODEL_PATH,
-    LLM_API_KEY,
-    LLM_MAX_TOKENS,
-    LLM_STREAMING_ENABLED,
-    DEFAULT_LLM_PROVIDER
-} from '../../config/env.config.js';
+import config from '../../config/app.config.js'; // STAGE 1: Use centralized config
 import { Logger } from 'winston';
 
 import { CircuitBreaker } from '../../core/reliability/circuit-breaker.js';
@@ -22,6 +16,7 @@ import { contentFilter } from '../../core/security/content-filter.service.js';
 import { piiDetector } from '../../core/security/pii-detector.service.js';
 import { securityAudit } from '../../core/logger/security-audit.service.js';
 import deduplicationService from '../../core/cache/deduplication.service.js'; // Stage 4
+import { ContextManager } from './context-manager.service.js'; // STAGE 1
 
 // Import LLM Manager
 import { llmManager } from '../../core/llm/llm.manager.js';
@@ -33,6 +28,7 @@ import { Tool } from '../../core/llm/llm.interface.js';
 class LlmService {
     private logger: Logger;
     private circuitBreaker: CircuitBreaker;
+    private contextManager: ContextManager; // STAGE 1: Context window management
 
     constructor() {
         this.logger = createContextualLogger({ module: 'LlmService' });
@@ -45,6 +41,9 @@ class LlmService {
             resetTimeoutMs: 30000,
             requestTimeoutMs: 60000
         });
+
+        // STAGE 1: Initialize context manager with model token limits
+        this.contextManager = new ContextManager('gpt-3.5-turbo', config.LLM_MAX_TOKENS);
 
         this.logger.info('LlmService initialized with Circuit Breaker (Unified Backend).');
         auditService.logEvent('LLM_SERVICE_INIT', null, null, {}, 'success');
@@ -65,7 +64,7 @@ class LlmService {
      */
     private getModelPath(preferredModel?: string): string {
         if (!preferredModel) {
-            return LLM_MODEL_PATH;
+            return config.LLM_MODEL;
         }
 
         const modelConfig = getModelConfig(preferredModel);
@@ -184,7 +183,8 @@ class LlmService {
             const cacheKey = this.generateCacheKey({ ...structuredPrompt, model: preferredModel });
 
             // Stage 4: Deduplication for non-streaming requests only
-            if (!LLM_STREAMING_ENABLED || !onPartialResponse) {
+            // Note: Streaming is always enabled in current setup
+            if (!onPartialResponse) {
                 return await deduplicationService.deduplicate(
                     `llm:${cacheKey}`,
                     async () => {
@@ -251,9 +251,9 @@ class LlmService {
 
                 const options = {
                     model: this.getModelPath(preferredModel),
-                    maxTokens: LLM_MAX_TOKENS,
-                    temperature: 0.7,
-                    stream: LLM_STREAMING_ENABLED,
+                    maxTokens: config.LLM_MAX_TOKENS,
+                    temperature: config.LLM_TEMPERATURE,
+                    stream: true, // Always stream
                     stopSequences: ["User:", "System:", "Assistant:", "\nUser:", "\nAssistant:"]
                 };
 
@@ -277,16 +277,14 @@ class LlmService {
                         );
                     }
 
-                    if (LLM_STREAMING_ENABLED && onPartialResponse && newContent) {
+                    if (onPartialResponse && newContent) {
                         // Directly stream what we get from provider
-                        // Removed complex stabilization buffer as providers handle decoding
-                        // Assuming providers emit valid strings
                         // @ts-ignore
                         await onPartialResponse({ type: 'partial', text: newContent });
                     }
                 }
 
-                if (LLM_STREAMING_ENABLED && onPartialResponse) {
+                if (onPartialResponse) {
                     // @ts-ignore
                     await onPartialResponse({ type: 'final', text: '' }); // Final signal
                 }
@@ -326,20 +324,51 @@ class LlmService {
     }
 
     private _formatPromptForLLM(structuredPrompt: any): string {
-        let promptParts: string[] = [];
-        promptParts.push(`System: ${structuredPrompt.system_message}`);
+        // STAGE 1: Build messages array for context manager
+        const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
 
+        // Add conversation history
         if (structuredPrompt.conversation_history && structuredPrompt.conversation_history.length > 0) {
-            const maxInteractions = 8;
-            const limitedHistory = structuredPrompt.conversation_history.slice(-maxInteractions);
-            limitedHistory.forEach((interaction: any) => {
-                if (interaction.query) promptParts.push(`User: ${interaction.query}`);
-                if (interaction.response) promptParts.push(`Assistant: ${interaction.response}`);
+            structuredPrompt.conversation_history.forEach((interaction: any) => {
+                if (interaction.query) {
+                    messages.push({ role: 'user', content: interaction.query });
+                }
+                if (interaction.response) {
+                    messages.push({ role: 'assistant', content: interaction.response });
+                }
             });
         }
 
+        // Add current query
+        messages.push({ role: 'user', content: structuredPrompt.current_user_query });
+
+        // STAGE 1: Truncate context if needed
+        const { messages: truncatedMessages, truncated } = this.contextManager.truncateContext(
+            messages,
+            structuredPrompt.system_message
+        );
+
+        if (truncated) {
+            this.logger.warn('Context window truncated for LLM', {
+                originalMessages: messages.length,
+                truncatedMessages: truncatedMessages.length - 1 // -1 for system message
+            });
+        }
+
+        // Format truncated messages for LLM
+        let promptParts: string[] = [];
+
+        for (const msg of truncatedMessages) {
+            if (msg.role === 'system') {
+                promptParts.push(`System: ${msg.content}`);
+            } else if (msg.role === 'user') {
+                promptParts.push(`User: ${msg.content}`);
+            } else if (msg.role === 'assistant') {
+                promptParts.push(`Assistant: ${msg.content}`);
+            }
+        }
+
         promptParts.push(`\n=== CURRENT INTERACTION ===`);
-        promptParts.push(`User: ${structuredPrompt.current_user_query}`);
         promptParts.push(`Assistant:`);
 
         return promptParts.join('\n');

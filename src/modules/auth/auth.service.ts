@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 import User, { IUser, IRefreshToken } from '../../modules/user/user.entity.js';
 import { createContextualLogger } from '../../core/logger/logger.js';
 import auditService from '../../core/logger/audit.service.js';
-import { JWT_SECRET } from '../../config/env.config.js';
+import config from '../../config/app.config.js'; // STAGE 1
 import { encryptToken, decryptToken } from '../../core/security/oauth-security.util.js';
 import { Logger } from 'winston';
 
@@ -35,7 +35,7 @@ export class AuthService {
             exp = now + (value * 24 * 60 * 60);
         }
 
-        return jwt.sign({ ...payload, exp }, JWT_SECRET);
+        return jwt.sign({ ...payload, exp }, config.JWT_SECRET); // STAGE 1
     }
 
     public generateRefreshToken(userId: string, expiresIn: string = '7d', deviceId?: string, userAgent?: string): IRefreshToken {
@@ -104,7 +104,7 @@ export class AuthService {
             // If the refresh token is not found or is invalid, consider all tokens for this user compromised
             // and revoke all of them. This is a security measure to prevent token replay.
             await this.revokeAllRefreshTokens(userId);
-            this.logger.warn(`Compromised refresh token detected for user ${userId}. All tokens revoked.`);
+            this.logger.warn(`Compromised refresh token detected for user ${userId}.All tokens revoked.`);
             throw new Error('Invalid or revoked refresh token. Please log in again.');
         }
 
@@ -134,7 +134,7 @@ export class AuthService {
 
         let user = await User.findOne({ $or: [{ username }, { email }] });
         if (user) {
-            this.logger.warn(`Registration attempt for existing user: ${username || email}`);
+            this.logger.warn(`Registration attempt for existing user: ${username || email} `);
             auditService.logAuthEvent(null, 'REGISTER', 'failure', { username, email, reason: 'User already exists' });
             throw new Error('User with that username or email already exists.');
         }
@@ -150,7 +150,7 @@ export class AuthService {
         });
 
         await user.save();
-        this.logger.info(`User registered successfully: ${user.username}`);
+        this.logger.info(`User registered successfully: ${user.username} `);
         auditService.logAuthEvent(user.userId, 'REGISTER', 'success', { username, email });
         return user;
     }
@@ -161,7 +161,7 @@ export class AuthService {
         });
 
         if (!user) {
-            this.logger.warn(`Login attempt with unknown identifier: ${loginIdentifier}`);
+            this.logger.warn(`Login attempt with unknown identifier: ${loginIdentifier} `);
             auditService.logAuthEvent(null, 'LOGIN', 'failure', { loginIdentifier, reason: 'Invalid credentials - user not found' });
             throw new Error('Invalid credentials');
         }
@@ -185,7 +185,7 @@ export class AuthService {
 
         await this.saveRefreshToken(user.userId, refreshToken);
 
-        this.logger.info(`User logged in successfully: ${user.username}`);
+        this.logger.info(`User logged in successfully: ${user.username} `);
         auditService.logAuthEvent(user.userId, 'LOGIN', 'success', { loginIdentifier });
 
         return {
@@ -198,9 +198,9 @@ export class AuthService {
         try {
             const decryptedToken = decryptToken(refreshToken);
             await this.revokeRefreshToken(userId, decryptedToken);
-            this.logger.info(`User ${userId} logged out successfully (token revoked).`);
+            this.logger.info(`User ${userId} logged out successfully(token revoked).`);
         } catch (error: any) {
-            this.logger.warn(`Logout failed for user ${userId}: ${error.message}`);
+            this.logger.warn(`Logout failed for user ${userId}: ${error.message} `);
             // We don't throw here to allow the logout process to complete even if token is invalid
         }
     }

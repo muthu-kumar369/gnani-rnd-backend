@@ -7,7 +7,7 @@ import { createContextualLogger } from '../../core/logger/logger.js';
 import metrics from '../../core/monitoring/metrics.js';
 import auditService from '../../core/logger/audit.service.js';
 import latencyMonitor from '../../core/monitoring/latency.monitor.js';
-import { WHISPER_MODEL_PATH, WHISPER_LANGUAGE, WHISPER_SAMPLE_RATE, WHISPER_COMPUTE_TYPE, WHISPER_PYTHON_PATH } from '../../config/env.config.js';
+import config from '../../config/app.config.js';
 import { Logger } from 'winston';
 import { fileURLToPath } from 'url';
 
@@ -35,15 +35,15 @@ class WhisperService {
     private readonly MAX_RESTARTS: number = 5;
 
     initPythonProcess(): void {
-        const pythonExecutable = WHISPER_PYTHON_PATH;
+        const pythonExecutable = config.WHISPER_PYTHON_PATH; // STAGE 1
         const pythonScriptPath = path.join(process.cwd(), 'scripts', 'shell', 'whisper_runner.py');
 
         const args = [
             pythonScriptPath,
-            '--model', WHISPER_MODEL_PATH,
-            '--language', WHISPER_LANGUAGE,
-            '--sample_rate', WHISPER_SAMPLE_RATE.toString(),
-            '--compute_type', WHISPER_COMPUTE_TYPE,
+            '--model', config.WHISPER_MODEL_PATH, // STAGE 1
+            '--language', config.WHISPER_LANGUAGE, // STAGE 1
+            '--sample_rate', config.WHISPER_SAMPLE_RATE.toString(), // STAGE 1
+            '--compute_type', config.WHISPER_COMPUTE_TYPE, // STAGE 1
         ];
 
         // We still want to log to file, but also listen to the stream
@@ -69,7 +69,7 @@ class WhisperService {
             if (this.pythonProcess.stdout) {
                 this.pythonProcess.stdout.on('data', (data: Buffer) => {
                     const message = data.toString().trim();
-                    // this.logger.debug(`Whisper stdout: ${message}`); // Too noisy
+                    // this.logger.debug(`Whisper stdout: ${ message } `); // Too noisy
 
                     // Robust parsing: sessionId:transcript:isFinal
                     // Regex: ^([^:]+):(.*):(true|false)$
@@ -81,7 +81,7 @@ class WhisperService {
                         const transcript = match[2];
                         const isFinal = match[3] === 'true';
 
-                        this.logger.debug(`Transcribed Text for session ${sessionId}: '${transcript}' (isFinal: ${isFinal})`);
+                        this.logger.debug(`Transcribed Text for session ${sessionId}: '${transcript}'(isFinal: ${isFinal})`);
 
                         // Skip partial transcripts - only process final ones
                         if (!isFinal) {
@@ -98,13 +98,13 @@ class WhisperService {
                             metrics.incWhisperTranscription(sessionId, 'success');
                         }
                     } else if (message.startsWith('ERROR:')) {
-                        this.logger.error(`Whisper process error: ${message}`);
+                        this.logger.error(`Whisper process error: ${message} `);
                         auditService.logWhisperEvent(null, null, message, null, 'failure', message);
                     } else if (message === 'ACK') {
                         // Ignore ACK
                     } else {
                         // Log unexpected format but don't crash
-                        // this.logger.warn(`Unexpected Whisper output format: ${message}`);
+                        // this.logger.warn(`Unexpected Whisper output format: ${ message } `);
                     }
                 });
             }
@@ -122,7 +122,7 @@ class WhisperService {
                         }
                     }
 
-                    this.logger.error(`Whisper stderr: ${errorMsg}`);
+                    this.logger.error(`Whisper stderr: ${errorMsg} `);
 
                     // Detect critical errors
                     if (errorMsg.includes('Traceback') || errorMsg.includes('Error:')) {
@@ -139,7 +139,7 @@ class WhisperService {
                 if (this.restartCount < this.MAX_RESTARTS) {
                     this.restartCount++;
                     const delay = 5000 * this.restartCount; // Exponential backoff
-                    this.logger.info(`Restarting Whisper process in ${delay}ms (Attempt ${this.restartCount}/${this.MAX_RESTARTS})...`);
+                    this.logger.info(`Restarting Whisper process in ${delay} ms(Attempt ${this.restartCount} / ${this.MAX_RESTARTS})...`);
                     setTimeout(() => this.initPythonProcess(), delay);
                 } else {
                     this.logger.error('Max restart attempts reached for Whisper process. Manual intervention required.');
@@ -148,7 +148,7 @@ class WhisperService {
             });
 
             this.pythonProcess.on('error', (err: Error) => {
-                this.logger.error(`Failed to start Whisper Python process: ${err.message}`);
+                this.logger.error(`Failed to start Whisper Python process: ${err.message} `);
                 this.pythonProcess = null;
                 closeFd();
             });
@@ -182,11 +182,11 @@ class WhisperService {
 
         this.transcriptionCallbacks.set(sessionId, wrappedCallback);
 
-        const header = `${sessionId}:${isLastChunk ? 'LAST' : 'CHUNK'}:_`;
+        const header = `${sessionId}:${isLastChunk ? 'LAST' : 'CHUNK'}: _`;
         const headerBuffer = Buffer.from(header, 'utf-8');
         const audioData = audioChunk; // audioChunk is already a Buffer
 
-        this.logger.info(`Sending audio chunk to Whisper. Session: ${sessionId}, isLast: ${isLastChunk}, Raw data length: ${audioData.length}, First 50 chars: ${audioData.slice(0, 50).toString('hex')}...`);
+        this.logger.info(`Sending audio chunk to Whisper.Session: ${sessionId}, isLast: ${isLastChunk}, Raw data length: ${audioData.length}, First 50 chars: ${audioData.slice(0, 50).toString('hex')}...`);
 
         if (this.pythonProcess.stdin) {
             // Send header length as 4-byte binary integer
@@ -215,7 +215,7 @@ class WhisperService {
 
     cleanupSession(sessionId: string): void {
         this.transcriptionCallbacks.delete(sessionId);
-        this.logger.debug(`WhisperService cleaned up session: ${sessionId}`);
+        this.logger.debug(`WhisperService cleaned up session: ${sessionId} `);
         auditService.logEvent('WHISPER_SESSION_CLEANUP', null, sessionId, {}, 'info');
     }
 }

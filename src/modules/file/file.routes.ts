@@ -3,6 +3,7 @@ import { Router } from 'express';
 import fileController from './file.controller.js';
 import { upload } from '../../config/multer.config.js';
 import { validate } from '../../middleware/zod.middleware.js';
+import { validateFileUpload } from '../../middleware/file-validation.middleware.js'; // STAGE 1
 import { z } from 'zod';
 
 const router = Router();
@@ -14,8 +15,12 @@ const fileIdParamSchema = z.object({
     })
 });
 
-// Upload file
-router.post('/upload', upload.single('file'), (req, res) => fileController.uploadFile(req, res));
+// Upload file - STAGE 1: Added file validation middleware
+router.post('/upload',
+    upload.single('file'),
+    validateFileUpload('document'), // STAGE 1: Validate file size and type
+    (req, res) => fileController.uploadFile(req, res)
+);
 
 // Get file metadata
 router.get('/:fileId', validate(fileIdParamSchema), (req, res) => fileController.getFile(req, res));

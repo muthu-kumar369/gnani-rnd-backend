@@ -6,6 +6,7 @@ import { createContextualLogger } from '../../core/logger/logger.js';
 import { Types } from 'mongoose';
 import sessionCoordinator from '../session/session.coordinator.js';
 import { redisClient } from '../../config/redis.config.js'; // STAGE 13
+import { validateMessage } from './message-validator.js'; // STAGE 1
 
 interface PaginationOptions {
     page?: number;
@@ -490,6 +491,14 @@ class ConversationService {
         const streamId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const generationId = `gen_${parentMessage._id}_${nextGenerationIndex}`;
 
+        // STAGE 1: Validate message before creation
+        await validateMessage({
+            parentId: parentMessage._id.toString(),
+            conversationId,
+            role: 'assistant',
+            content: ' '
+        });
+
         const newGeneration = await ConversationMessage.create({
             userId,
             conversationId,
@@ -634,6 +643,14 @@ class ConversationService {
         if (autoRegenerate) {
             const streamId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
             const generationId = `gen_${messageId}_0`;
+
+            // STAGE 1: Validate message before creation
+            await validateMessage({
+                parentId: messageId,
+                conversationId,
+                role: 'assistant',
+                content: ' '
+            });
 
             // Create new response with status 'pending'
             newResponse = await ConversationMessage.create({

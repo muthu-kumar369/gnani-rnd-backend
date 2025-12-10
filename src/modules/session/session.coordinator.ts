@@ -15,6 +15,19 @@ import ConversationMessage from '../memory/entities/conversation.entity.js';
 import sessionPersistence from './session.persistence.js';
 import assistantStateMachine from '../../core/state-machine/assistant.machine.js';
 import { AssistantEvent, AssistantState } from '../../core/state-machine/assistant-states.js';
+import { validateMessage } from '../conversation/message-validator.js'; // STAGE 1
+import { ContextBuilder } from './context.builder.js';
+import { LLMExecutor } from './llm.executor.js';
+import { ToolExecutor } from './tool.executor.js';
+import sessionMemory from '../memory/services/session-memory.service.js';
+import metrics from '../../core/monitoring/metrics.js';
+import auditService from '../../core/logger/audit.service.js';
+import { Logger } from 'winston';
+import Conversation from '../conversation/conversation.model.js';
+import ConversationMessage from '../memory/entities/conversation.entity.js';
+import sessionPersistence from './session.persistence.js';
+import assistantStateMachine from '../../core/state-machine/assistant.machine.js';
+import { AssistantEvent, AssistantState } from '../../core/state-machine/assistant-states.js';
 
 export interface Session {
     userId: string;
@@ -389,6 +402,16 @@ export class SessionCoordinator {
                     const lastMessage = await ConversationMessage.findOne({ conversationId: convIdToSave })
                         .sort({ timestamp: -1 });
 
+                    const targetParentId = lastMessage ? lastMessage._id.toString() : null;
+
+                    // STAGE 1: Validate before creating user message
+                    await validateMessage({
+                        parentId: targetParentId || undefined,
+                        conversationId: convIdToSave,
+                        role: 'user',
+                        content: transcript
+                    });
+
                     userMessageDoc = await ConversationMessage.create({
                         userId: session.userId,
                         conversationId: convIdToSave, // Use fallback if needed
@@ -398,7 +421,7 @@ export class SessionCoordinator {
                         generationId: genIdToSave,
                         status: 'completed',
                         version: 1,
-                        parentId: lastMessage ? lastMessage._id.toString() : null
+                        parentId: targetParentId
                     });
 
                     // Update parent's children
@@ -563,6 +586,14 @@ export class SessionCoordinator {
                     // If we skipped user persistence, do we have a parent?
                     // In normal flow, userMessageDoc is set.
                     const parentId = userMessageDoc ? userMessageDoc._id.toString() : null;
+
+                    // STAGE 1: Validate before creating assistant message
+                    await validateMessage({
+                        parentId,
+                        conversationId: convIdToSave,
+                        role: 'assistant',
+                        content: response.text
+                    });
 
                     const newMsg = await ConversationMessage.create({
                         userId: session.userId,
