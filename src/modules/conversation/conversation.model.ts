@@ -7,6 +7,8 @@ export interface IConversation extends Document {
     systemPrompt: string;
     currentTemplate?: string;  // Template ID currently applied to this conversation
     currentModel?: string;     // Model ID currently selected for this conversation
+    folderId?: string;         // Folder ID (STAGE R6)
+    tags?: string[];           // Tags (STAGE R6)
     isDeleted: boolean;
     metadata: Record<string, any>;
     createdAt: Date;
@@ -42,6 +44,16 @@ const conversationSchema = new Schema({
         type: String,
         required: false,
         default: 'gemma:2b'  // Default to gemma:2b for low RAM usage
+    },
+    folderId: {
+        type: String,
+        required: false,
+        index: true
+    },
+    tags: {
+        type: [String],
+        default: [],
+        index: true
     },
     isDeleted: {
         type: Boolean,

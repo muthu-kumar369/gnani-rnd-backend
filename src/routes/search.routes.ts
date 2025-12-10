@@ -39,8 +39,19 @@ router.post('/', authMiddleware, async (req: CustomRequest, res: Response) => {
             };
         }
 
-        if (filters.model) {
+        if (filters.models && filters.models.length > 0) {
+            searchQuery.currentModel = { $in: filters.models };
+        } else if (filters.model) {
+            // Backward compatibility
             searchQuery.currentModel = filters.model;
+        }
+
+        if (filters.folders && filters.folders.length > 0) {
+            searchQuery.folderId = { $in: filters.folders };
+        }
+
+        if (filters.tags && filters.tags.length > 0) {
+            searchQuery.tags = { $in: filters.tags };
         }
 
         // Search conversations

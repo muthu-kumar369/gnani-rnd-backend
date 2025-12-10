@@ -49,7 +49,7 @@ app.use(compression({
 
 // Middleware
 app.use(globalRateLimiter); // Apply global rate limiting first
-app.use('/api/auth', strictRateLimiter); // Apply stricter limit to auth routes
+app.use('/api/v1/auth', strictRateLimiter); // Apply stricter limit to auth routes
 // app.use('/api', apiLimiter); // Removed redundant apiLimiter, global covers it or use specific if needed
 app.use(corsMiddleware);
 app.use(bodyParser.json());
@@ -58,7 +58,7 @@ app.use(morgan('combined', { stream: { write: (message: string) => logger.info(m
 // Routes
 app.use('/health', healthRoutes); // Register health routes (e.g. /health/live, /health/ready)
 app.use('/', metricsRoutes); // Stage 6: Prometheus metrics endpoint
-app.use('/api', apiRoutes);
+app.use('/api/v1', apiRoutes);
 
 // Stage 12: Setup Swagger API Documentation
 setupSwagger(app);

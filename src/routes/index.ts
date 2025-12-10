@@ -14,6 +14,7 @@ import monitoringRoutes from './monitoring.routes.js';
 import chatRoutes from './chat.routes.js';
 import templateRoutes from '../modules/template/template.routes.js';
 import toolRoutes from '../modules/tool/tool.routes.js';
+import { authMiddleware } from '../core/security/auth.middleware.js';
 
 const router = express.Router();
 
@@ -42,7 +43,7 @@ router.use('/session', sessionRoutes);     // Routes for /api/session/...
 import searchRoutes from '../modules/search/search.routes.js';
 import plannerRoutes from '../modules/planner/planner.routes.js';
 import memoryRoutes from '../modules/memory/memory.routes.js';
-import analyticsRoutes from '../modules/analytics/analytics.routes.js';
+import analyticsRoutes from './analytics.routes.js';
 import feedbackRoutes from './feedback.routes.js'; // STAGE 21
 import shareRoutes from './share.routes.js'; // STAGE 22
 import modelRoutes from './model.routes.js'; // STAGE 23
@@ -53,7 +54,7 @@ import pluginRoutes from './plugin.routes.js'; // STAGE 28
 router.use('/search', searchRoutes);       // Routes for /api/search/...
 router.use('/planner', plannerRoutes);     // Routes for /api/planner/...
 router.use('/memory', memoryRoutes);       // Routes for /api/memory/...
-router.use('/analytics', analyticsRoutes); // Routes for /api/analytics/...
+router.use('/analytics', authMiddleware, analyticsRoutes); // Routes for /api/analytics/ with Auth
 router.use('/feedback', feedbackRoutes);   // STAGE 21: Routes for /api/feedback/...
 router.use('/share', shareRoutes);         // STAGE 22: Routes for /api/share/...
 router.use('/conversations', modelRoutes); // STAGE 23: Routes for /api/conversations/:id/model
