@@ -1,0 +1,6 @@
+# Stage 5: Python Dependencies
+# Install with: pip install -r requirements-stage5.txt
+
+sentence-transformers>=2.2.0
+torch>=2.0.0
+transformers>=4.30.0

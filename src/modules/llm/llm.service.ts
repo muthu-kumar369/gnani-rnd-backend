@@ -21,6 +21,7 @@ import { ContextManager } from './context-manager.service.js'; // STAGE 1
 // Import LLM Manager
 import { llmManager } from '../../core/llm/llm.manager.js';
 import { Tool } from '../../core/llm/llm.interface.js';
+import multiStepPlanner from '../planner/multi-step-planner.service.js'; // STAGE 3: Multi-step planning
 
 // TODO Stage 4: Wrap getLlmResponse cache check (line 181-192) with:
 // deduplicationService.deduplicate(dedupKey, async () => { /* cache check + LLM call */ }, 5*60*1000)
@@ -47,6 +48,23 @@ class LlmService {
 
         this.logger.info('LlmService initialized with Circuit Breaker (Unified Backend).');
         auditService.logEvent('LLM_SERVICE_INIT', null, null, {}, 'success');
+    }
+
+    /**
+     * STAGE 3: Detect if query requires multi-step planning
+     */
+    private requiresMultiStepPlanning(query: string): boolean {
+        const complexityIndicators = [
+            /research.*and.*create/i,
+            /analyze.*then.*summarize/i,
+            /find.*and.*compare/i,
+            /gather.*information.*about/i,
+            /step by step/i,
+            /first.*then.*finally/i,
+            /multiple.*steps/i
+        ];
+
+        return complexityIndicators.some(pattern => pattern.test(query));
     }
 
     private generateCacheKey(prompt: any): string {
@@ -171,6 +189,26 @@ class LlmService {
         auditService.logLlmEvent(userId, sessionId, structuredPrompt, null, 'info', null);
 
         return traceAsyncOperation('llm.getLlmResponse', async () => {
+            // STAGE 3: Multi-step planning for complex queries
+            if (this.requiresMultiStepPlanning(structuredPrompt.current_user_query)) {
+                this.logger.info('Complex query detected, using multi-step planner', { sessionId });
+                try {
+                    const plan = await multiStepPlanner.createPlan(
+                        structuredPrompt.current_user_query,
+                        { userId, sessionId }
+                    );
+                    const executedPlan = await multiStepPlanner.executePlan(plan);
+                    const result = executedPlan.steps
+                        .filter(s => s.status === 'completed')
+                        .map(s => `Step: ${s.description}\nResult: ${JSON.stringify(s.result)}`)
+                        .join('\n\n');
+                    return { text: result, action: null };
+                } catch (error: any) {
+                    this.logger.warn('Multi-step planning failed, falling back to standard LLM', { error: error.message });
+                    // Fall through to standard LLM processing
+                }
+            }
+
             // SECURITY: Content filtering
             if (process.env.CONTENT_FILTER_ENABLED === 'true') {
                 const inputFilter = await contentFilter.filterInput(structuredPrompt.current_user_query, userId);
@@ -194,7 +232,7 @@ class LlmService {
                             if (cached) {
                                 metrics.incrementLLMCacheHit();
                                 const response = JSON.parse(cached);
-                                if (onPartialResponse) await onPartialResponse({ type: 'complete_response', text: response.text } as any);
+                                // Skip callback for cached responses
                                 return response;
                             }
                             metrics.incrementLLMCacheMiss();
@@ -257,7 +295,7 @@ class LlmService {
                     stopSequences: ["User:", "System:", "Assistant:", "\nUser:", "\nAssistant:"]
                 };
 
-                const iterator = llmManager.generate(formattedPrompt, options);
+                const iterator = llmManager.generateWithFailover(formattedPrompt, options);
 
                 for await (const chunk of iterator) {
                     const newContent = chunk.text;

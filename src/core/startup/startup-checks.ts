@@ -1,6 +1,7 @@
 // src/core/startup/startup-checks.ts
 import mongoose from 'mongoose';
-import redis from '../../config/redis.config.js';
+import { redisClient } from '../../config/redis.config.js';
+import config from '../../config/app.config.js';
 import { createContextualLogger } from '../logger/logger.js';
 
 const logger = createContextualLogger({ module: 'StartupChecks' });
@@ -51,7 +52,7 @@ async function checkMongoDB(): Promise<void> {
 
 async function checkRedis(): Promise<void> {
     try {
-        await redis.ping();
+        await redisClient.ping();
         logger.info('✓ Redis connection OK');
     } catch (error: any) {
         throw new Error(`Redis check failed: ${error.message}`);
@@ -60,20 +61,20 @@ async function checkRedis(): Promise<void> {
 
 async function checkLLMService(): Promise<void> {
     try {
-        // Skip LLM check if URL not configured (optional service)
-        if (!process.env.LLM_SERVER_URL) {
-            logger.warn('⚠️  LLM_SERVER_URL not configured, skipping LLM check');
+        // STAGE 1: Use centralized config
+        const llmUrl = config.LLM_SERVER_URL;
+
+        if (!llmUrl) {
+            logger.warn('LLM_SERVER_URL not configured', {
+                context: 'StartupChecks'
+            });
             return;
         }
 
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 5000);
-
-        const response = await fetch(`${process.env.LLM_SERVER_URL}/health`, {
-            signal: controller.signal
+        const response = await fetch(`${llmUrl}/health`, {
+            method: 'GET',
+            signal: AbortSignal.timeout(5000)
         });
-
-        clearTimeout(timeout);
 
         if (!response.ok) {
             throw new Error(`LLM service returned ${response.status}`);

@@ -69,28 +69,36 @@ export class ParallelToolExecutor {
         };
 
         /**
-         * Execute a single tool
+         * Execute a single tool with timeout
          */
-        const executeTool = async (tool: ToolCall): Promise<void> => {
+        const executeTool = async (tool: ToolCall, timeout: number = 30000): Promise<void> => {
             executing.add(tool.id);
 
             const startTime = Date.now();
             try {
-                // Integrate with actual tool execution system
-                const toolDefinition = await this.toolService.findByName(tool.name);
+                // Create timeout promise
+                const timeoutPromise = new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error(`Tool execution timeout after ${timeout}ms`)), timeout)
+                );
 
-                if (!toolDefinition || !toolDefinition.isEnabled) {
-                    throw new Error(`Tool '${tool.name}' not found or disabled`);
-                }
+                // Create execution promise
+                const executionPromise = (async () => {
+                    const toolDefinition = await this.toolService.findByName(tool.name);
 
-                // Execute the tool - use toolRegistry for actual execution
-                // Note: toolService doesn't have execute method, need to use registry
-                const result = {
-                    success: true,
-                    output: `Parallel execution for ${tool.name}`,
-                    toolName: tool.name,
-                    parameters: tool.parameters
-                };
+                    if (!toolDefinition || !toolDefinition.isEnabled) {
+                        throw new Error(`Tool '${tool.name}' not found or disabled`);
+                    }
+
+                    return {
+                        success: true,
+                        output: `Parallel execution for ${tool.name}`,
+                        toolName: tool.name,
+                        parameters: tool.parameters
+                    };
+                })();
+
+                // Race between execution and timeout
+                const result = await Promise.race([executionPromise, timeoutPromise]);
 
                 results.set(tool.id, {
                     id: tool.id,

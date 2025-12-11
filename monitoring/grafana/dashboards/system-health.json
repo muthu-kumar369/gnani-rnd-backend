@@ -1,0 +1,112 @@
+{
+    "dashboard": {
+        "title": "Gnani System Health",
+        "tags": [
+            "gnani",
+            "system"
+        ],
+        "timezone": "browser",
+        "panels": [
+            {
+                "title": "CPU Usage",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 0,
+                    "y": 0
+                },
+                "targets": [
+                    {
+                        "expr": "rate(process_cpu_seconds_total[5m]) * 100",
+                        "legendFormat": "CPU %"
+                    }
+                ]
+            },
+            {
+                "title": "Memory Usage",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 12,
+                    "y": 0
+                },
+                "targets": [
+                    {
+                        "expr": "process_resident_memory_bytes / 1024 / 1024",
+                        "legendFormat": "Memory (MB)"
+                    }
+                ]
+            },
+            {
+                "title": "Request Rate",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 0,
+                    "y": 8
+                },
+                "targets": [
+                    {
+                        "expr": "rate(http_requests_total[5m])",
+                        "legendFormat": "{{method}} {{path}}"
+                    }
+                ]
+            },
+            {
+                "title": "Error Rate",
+                "type": "graph",
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 12,
+                    "y": 8
+                },
+                "targets": [
+                    {
+                        "expr": "rate(http_requests_total{status=~\"5..\"}[5m])",
+                        "legendFormat": "5xx Errors"
+                    },
+                    {
+                        "expr": "rate(http_requests_total{status=~\"4..\"}[5m])",
+                        "legendFormat": "4xx Errors"
+                    }
+                ]
+            },
+            {
+                "title": "Active Connections",
+                "type": "stat",
+                "gridPos": {
+                    "h": 4,
+                    "w": 6,
+                    "x": 0,
+                    "y": 16
+                },
+                "targets": [
+                    {
+                        "expr": "websocket_connections_active",
+                        "legendFormat": "WebSocket"
+                    }
+                ]
+            },
+            {
+                "title": "Circuit Breaker Status",
+                "type": "stat",
+                "gridPos": {
+                    "h": 4,
+                    "w": 6,
+                    "x": 6,
+                    "y": 16
+                },
+                "targets": [
+                    {
+                        "expr": "circuit_breaker_state",
+                        "legendFormat": "{{circuit}}"
+                    }
+                ]
+            }
+        ]
+    }
+}

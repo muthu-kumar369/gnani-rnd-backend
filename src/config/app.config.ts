@@ -7,13 +7,13 @@ dotenv.config();
 const configSchema = z.object({
     // Server
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-    PORT: z.string().transform(Number).default('3000'),
+    PORT: z.string().default('3000').transform(Number),
     HOST: z.string().default('localhost'),
 
     // Database
     MONGODB_URI: z.string(),
     REDIS_HOST: z.string().default('localhost'),
-    REDIS_PORT: z.string().transform(Number).default('6379'),
+    REDIS_PORT: z.string().default('6379').transform(Number),
     REDIS_PASSWORD: z.string().optional(),
 
     // API
@@ -24,8 +24,8 @@ const configSchema = z.object({
     LLM_PROVIDER: z.enum(['ollama', 'localai', 'vllm', 'llamacpp']).default('ollama'),
     LLM_SERVER_URL: z.string().default('http://localhost:11434'),
     LLM_MODEL: z.string().default('llama2'),
-    LLM_MAX_TOKENS: z.string().transform(Number).default('4096'),
-    LLM_TEMPERATURE: z.string().transform(Number).default('0.7'),
+    LLM_MAX_TOKENS: z.string().default('4096').transform(Number),
+    LLM_TEMPERATURE: z.string().default('0.7').transform(Number),
 
     // Whisper
     WHISPER_PROVIDER: z.enum(['api', 'cpp']).default('cpp'),
@@ -33,20 +33,20 @@ const configSchema = z.object({
     WHISPER_MODEL_PATH: z.string().default('./whisper-cpp/models/ggml-base.en.bin'),
     WHISPER_PYTHON_PATH: z.string().default('python'), // STAGE 1
     WHISPER_LANGUAGE: z.string().default('en'), // STAGE 1
-    WHISPER_SAMPLE_RATE: z.string().transform(Number).default('16000'), // STAGE 1
+    WHISPER_SAMPLE_RATE: z.string().default('16000').transform(Number), // STAGE 1
     WHISPER_COMPUTE_TYPE: z.string().default('int8'), // STAGE 1
 
     // ChromaDB
     CHROMA_HOST: z.string().default('localhost'),
-    CHROMA_PORT: z.string().transform(Number).default('8000'),
+    CHROMA_PORT: z.string().default('8000').transform(Number),
 
     // File Upload
-    MAX_FILE_SIZE_MB: z.string().transform(Number).default('50'),
+    MAX_FILE_SIZE_MB: z.string().default('50').transform(Number),
     UPLOAD_DIR: z.string().default('./uploads'),
 
     // Cache
-    CACHE_TTL_SECONDS: z.string().transform(Number).default('3600'),
-    CACHE_MAX_KEYS: z.string().transform(Number).default('1000'),
+    CACHE_TTL_SECONDS: z.string().default('3600').transform(Number),
+    CACHE_MAX_KEYS: z.string().default('1000').transform(Number),
 
     // Security
     JWT_SECRET: z.string(),
@@ -54,11 +54,11 @@ const configSchema = z.object({
     REFRESH_TOKEN_EXPIRES_IN: z.string().default('7d'),
 
     // Rate Limiting
-    RATE_LIMIT_WINDOW_MS: z.string().transform(Number).default('60000'),
-    RATE_LIMIT_MAX_REQUESTS: z.string().transform(Number).default('100'),
+    RATE_LIMIT_WINDOW_MS: z.string().default('60000').transform(Number),
+    RATE_LIMIT_MAX_REQUESTS: z.string().default('100').transform(Number),
 
     // Vault (optional)
-    VAULT_ENABLED: z.string().transform(v => v === 'true').default('false'),
+    VAULT_ENABLED: z.string().default('false').transform(v => v === 'true'),
     VAULT_ADDR: z.string().optional(),
     VAULT_TOKEN: z.string().optional(),
 });
@@ -69,7 +69,7 @@ const parseConfig = () => {
     } catch (error) {
         if (error instanceof z.ZodError) {
             console.error('❌ Configuration validation failed:');
-            error.errors.forEach(err => {
+            error.issues.forEach((err: z.ZodIssue) => {
                 console.error(`  ${err.path.join('.')}: ${err.message}`);
             });
             process.exit(1);

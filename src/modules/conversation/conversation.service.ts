@@ -21,11 +21,18 @@ class ConversationService {
      * List conversations for a user (STAGE 12: Optimized with aggregation pipeline)
      */
     async listConversations(userId: string, options: PaginationOptions = {}) {
-        const page = Math.max(1, options.page || 1);
-        const limit = Math.max(1, Math.min(50, options.limit || 20));
+        const page = Math.max(1, Number(options.page) || 1);
+        const limit = Math.max(1, Math.min(50, Number(options.limit) || 20));
         const skip = (page - 1) * limit;
 
-        const sortBy = options.sortBy || 'updatedAt';
+        // Map frontend sort keys to backend fields
+        const sortMapping: Record<string, string> = {
+            'date': 'updatedAt',
+            'name': 'title',
+            'messageCount': 'updatedAt' // Fallback for now until message count is aggregated
+        };
+
+        const sortBy = sortMapping[options.sortBy || 'date'] || 'updatedAt';
         const sortOrder = options.sortOrder === 'asc' ? 1 : -1;
 
         // STAGE 13 Step 1: Check Redis cache first
@@ -148,13 +155,21 @@ class ConversationService {
             return null;
         }
 
+        const totalMessages = await ConversationMessage.countDocuments({ conversationId });
+
+        // Fetch only latest 50 messages initially for performance
         const messages = await ConversationMessage.find({ conversationId })
-            .sort({ timestamp: 1 })
+            .sort({ timestamp: -1 })
+            .limit(50)
             .lean();
+
+        // Restore chronological order for the tree builder
+        messages.reverse();
 
         return {
             ...conversation,
             id: conversation._id,
+            hasMoreMessages: totalMessages > messages.length,
             messages: messages.map(msg => ({
                 id: msg._id,
                 role: msg.role,
@@ -165,6 +180,43 @@ class ConversationService {
                 branchIndex: msg.branchIndex,
                 metadata: msg.metadata
             }))
+        };
+    }
+
+    /**
+     * Get paginated messages for a conversation
+     */
+    async getMessages(conversationId: string, userId: string, options: { limit?: number; before?: string } = {}) {
+        const limit = Math.max(1, Math.min(100, options.limit || 50));
+        const query: any = { conversationId, userId };
+
+        if (options.before) {
+            query.timestamp = { $lt: new Date(options.before) };
+        }
+
+        const messages = await ConversationMessage.find(query)
+            .sort({ timestamp: -1 }) // Newest first
+            .limit(limit)
+            .lean();
+
+        // Return in chronological order for frontend consistency (oldest -> newest)
+        // But for pagination (infinite scroll up), we often want them reversed. 
+        // Logic: Return as is, let frontend handle merging.
+        // Actually, frontend expects linear chunks. 
+
+        return {
+            messages: messages.map(msg => ({
+                id: msg._id,
+                _id: msg._id,
+                role: msg.role,
+                content: msg.content,
+                timestamp: msg.timestamp,
+                parentId: msg.parentId,
+                children: msg.children,
+                branchIndex: msg.branchIndex,
+                metadata: msg.metadata
+            })),
+            hasMore: messages.length === limit
         };
     }
 
@@ -892,6 +944,54 @@ class ConversationService {
         });
 
         return { restoredCount: messageIds.length };
+    }
+
+    // STAGE 2: Undo/Restore methods
+    async restoreDeletedMessage(conversationId: string, message: any, userId: string) {
+        // Restore a deleted message
+        const restoredMessage = await ConversationMessage.create({
+            ...message,
+            userId,
+            conversationId,
+            deletedAt: null,
+            deletedBy: null
+        });
+
+        return restoredMessage;
+    }
+
+    async updateMessageContent(conversationId: string, messageId: string, content: string, userId: string) {
+        // Update message content (for undo edit)
+        const message = await ConversationMessage.findOneAndUpdate(
+            { _id: messageId, conversationId, userId, deletedAt: null },
+            { content },
+            { new: true }
+        );
+
+        if (!message) {
+            throw new Error('Message not found');
+        }
+
+        return message;
+    }
+
+    async restoreGeneration(conversationId: string, messageId: string, previousMessage: any, userId: string) {
+        // Restore previous generation (for undo regenerate)
+        // Delete the current message and restore the previous one
+        await ConversationMessage.findOneAndUpdate(
+            { _id: messageId, conversationId, userId },
+            { deletedAt: new Date(), deletedBy: userId }
+        );
+
+        // Restore previous message
+        const restoredMessage = await ConversationMessage.create({
+            ...previousMessage,
+            userId,
+            conversationId,
+            deletedAt: null
+        });
+
+        return restoredMessage;
     }
 }
 

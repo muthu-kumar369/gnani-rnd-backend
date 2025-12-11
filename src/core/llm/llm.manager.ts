@@ -11,6 +11,8 @@ export type TaskType = 'chat' | 'code' | 'planning' | 'tool';
 
 export class LLMManager {
     private providers: Map<string, LLMProvider> = new Map();
+    private providerList: LLMProvider[] = []; // Ordered list for failover
+    private currentProviderIndex: number = 0;
     public currentProvider: LLMProvider; // Made public for health checks
 
     constructor() {
@@ -29,10 +31,64 @@ export class LLMManager {
         const defaultProviderName = process.env.DEFAULT_LLM_PROVIDER || 'ollama';
         this.currentProvider = this.providers.get(defaultProviderName) || ollama;
 
+        // Create ordered list for failover
+        this.providerList = Array.from(this.providers.values());
+        this.currentProviderIndex = this.providerList.indexOf(this.currentProvider);
+
         logger.info('LLMManager initialized', {
             provider: this.currentProvider.name,
             availableProviders: Array.from(this.providers.keys())
         });
+    }
+
+    /**
+     * Generate with automatic failover to backup providers
+     * Tries all providers in sequence if one fails
+     */
+    async *generateWithFailover(
+        prompt: string,
+        options?: GenerateOptions
+    ): AsyncIterableIterator<LLMResponse> {
+        const maxAttempts = this.providerList.length;
+        let lastError: Error | null = null;
+
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            const provider = this.providerList[this.currentProviderIndex];
+
+            try {
+                const available = await provider.isAvailable();
+                if (!available) {
+                    throw new Error(`Provider ${provider.name} is not available`);
+                }
+
+                logger.info('Attempting generation with provider', {
+                    provider: provider.name,
+                    attempt: attempt + 1,
+                    maxAttempts
+                });
+
+                yield* provider.generate(prompt, options);
+                return; // Success, exit
+            } catch (error: any) {
+                lastError = error;
+                logger.warn('Provider failed, trying next', {
+                    provider: provider.name,
+                    error: error.message,
+                    attempt: attempt + 1
+                });
+
+                // Rotate to next provider
+                this.currentProviderIndex = (this.currentProviderIndex + 1) % this.providerList.length;
+                this.currentProvider = this.providerList[this.currentProviderIndex];
+
+                if (attempt === maxAttempts - 1) {
+                    logger.error('All LLM providers failed', { error: lastError?.message });
+                    throw new Error('All LLM providers failed');
+                }
+            }
+        }
+
+        throw lastError || new Error('All LLM providers failed');
     }
 
     // Main generation method

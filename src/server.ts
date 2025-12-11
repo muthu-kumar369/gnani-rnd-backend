@@ -7,6 +7,7 @@ import compression from 'compression'; // STAGE 14
 import { PORT } from './config/env.config.js'; // Use PORT from config
 import logger from './core/logger/logger.js'; // Updated path for logger
 import apiRoutes from './routes/index.js'; // Import consolidated routes from src/routes/index.js
+import stage5Routes from './routes/stage5.routes.js'; // Stage 5: Advanced features
 import errorHandler from './core/http/error.middleware.js';
 import corsMiddleware from './middleware/cors.middleware.js';
 import { globalRateLimiter, strictRateLimiter } from './middleware/rate-limit.middleware.js';
@@ -59,6 +60,7 @@ app.use(morgan('combined', { stream: { write: (message: string) => logger.info(m
 app.use('/health', healthRoutes); // Register health routes (e.g. /health/live, /health/ready)
 app.use('/', metricsRoutes); // Stage 6: Prometheus metrics endpoint
 app.use('/api/v1', apiRoutes);
+app.use('/api/v1/stage5', stage5Routes); // Stage 5: Advanced features routes
 
 // Stage 12: Setup Swagger API Documentation
 setupSwagger(app);

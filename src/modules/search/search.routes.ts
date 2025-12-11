@@ -47,7 +47,7 @@ router.post('/hybrid', async (req, res) => {
 router.post('/', authMiddleware, async (req: CustomRequest, res) => {
     try {
         const userId = req.user?.id;
-        const { query, filters = {} } = req.body;
+        const { query, filters = {}, mode = 'basic' } = req.body;
 
         if (!userId) {
             return res.status(401).json({ error: 'Unauthorized' });
@@ -57,7 +57,33 @@ router.post('/', authMiddleware, async (req: CustomRequest, res) => {
             return res.status(400).json({ error: 'Search query is required' });
         }
 
-        // Build search query
+        // Use hybrid search for semantic or hybrid modes
+        if (mode === 'semantic' || mode === 'hybrid') {
+            const semanticWeight = mode === 'semantic' ? 1.0 : 0.7;
+            const keywordWeight = mode === 'semantic' ? 0.0 : 0.3;
+
+            const results = await hybridSearchService.search(query, {
+                limit: 20,
+                filters,
+                semanticWeight,
+                keywordWeight
+            });
+
+            logger.info(`Search completed (${mode}): "${query}" - ${results.length} results`);
+
+            return res.json({
+                results: results.map(r => ({
+                    conversationId: r.id,
+                    title: r.metadata?.title || 'Untitled Conversation',
+                    snippet: r.content.substring(0, 150) + '...',
+                    score: r.score,
+                    createdAt: r.metadata?.createdAt,
+                    model: r.metadata?.model
+                }))
+            });
+        }
+
+        // Basic mode: Use MongoDB text search
         const searchQuery: any = {
             userId,
             isDeleted: false,
@@ -90,7 +116,6 @@ router.post('/', authMiddleware, async (req: CustomRequest, res) => {
 
         // Format results
         const results = conversations.map((conv: any) => {
-            // Get best snippet from system prompt or title
             const snippet = conv.systemPrompt?.substring(0, 150) + '...' || conv.title?.substring(0, 150) + '...' || 'No preview available';
 
             return {
@@ -103,7 +128,7 @@ router.post('/', authMiddleware, async (req: CustomRequest, res) => {
             };
         });
 
-        logger.info(`Search completed: "${query}" - ${results.length} results`);
+        logger.info(`Search completed (basic): "${query}" - ${results.length} results`);
 
         res.json({ results });
     } catch (error: any) {

@@ -85,6 +85,28 @@ export class WhisperCppService {
       throw new Error('Whisper.cpp not available. Please run setup script.');
     }
 
+    // STAGE 1: Try Whisper.cpp first, fallback to API if needed
+    try {
+      const transcript = await this.transcribeWithCpp(sessionId, audioBuffer, sampleRate);
+
+      // Check if transcript is empty
+      if (!transcript || transcript.trim().length === 0) {
+        this.logger.warn('Whisper.cpp returned empty transcript, trying API fallback', { sessionId });
+        return await this.transcribeWithAPI(audioBuffer);
+      }
+
+      return transcript;
+    } catch (error: any) {
+      this.logger.error('Whisper.cpp failed, using API fallback', {
+        sessionId,
+        error: error.message
+      });
+      return await this.transcribeWithAPI(audioBuffer);
+    }
+  }
+
+  // STAGE 1: Whisper.cpp transcription (original implementation)
+  private async transcribeWithCpp(sessionId: string, audioBuffer: Buffer, sampleRate: number): Promise<string> {
     const startTime = Date.now();
 
     // Log buffer size to debug empty audio
@@ -94,8 +116,21 @@ export class WhisperCppService {
       sampleRate
     });
 
+    // STAGE 1: Validate audio buffer
     if (audioBuffer.length === 0) {
       this.logger.warn('Empty audio buffer received for transcription', { sessionId });
+      return '';
+    }
+
+    // STAGE 1: Check minimum audio length (at least 0.5 seconds)
+    const minBytes = sampleRate * 2 * 0.5; // sampleRate * 2 bytes * 0.5s
+    if (audioBuffer.length < minBytes) {
+      this.logger.warn('Audio too short for transcription', {
+        sessionId,
+        bytes: audioBuffer.length,
+        minBytes,
+        durationSeconds: audioBuffer.length / (sampleRate * 2)
+      });
       return '';
     }
 
@@ -152,6 +187,130 @@ export class WhisperCppService {
     }
   }
 
+  // STAGE 1: Python Whisper fallback (open-source, no paid API)
+  private async transcribeWithAPI(audioBuffer: Buffer): Promise<string> {
+    this.logger.info('Using Python Whisper fallback', {
+      bufferSize: audioBuffer.length
+    });
+
+
+    try {
+      // Save audio to temp file for Python Whisper
+      const tempFile = path.join(os.tmpdir(), `audio-fallback-${Date.now()}.wav`);
+
+      // Create WAV file
+      const wavHeader = this.createWavHeader(audioBuffer.length, 16000);
+      const wavBuffer = Buffer.concat([wavHeader, audioBuffer]);
+      fs.writeFileSync(tempFile, wavBuffer);
+
+      // Call Python Whisper using whisper library directly (open-source)
+      const pythonCode = `
+import sys
+import whisper
+
+try:
+    model = whisper.load_model("base")
+    result = model.transcribe("${tempFile.replace(/\\/g, '/')}", language="en")
+    print(result["text"])
+except Exception as e:
+    print(f"ERROR: {e}", file=sys.stderr)
+    sys.exit(1)
+`;
+
+      return new Promise((resolve) => {
+        const python = spawn('python', ['-c', pythonCode]);
+
+        let output = '';
+        let error = '';
+
+        python.stdout.on('data', (data) => {
+          output += data.toString();
+        });
+
+        python.stderr.on('data', (data) => {
+          error += data.toString();
+        });
+
+        python.on('close', (code) => {
+          // Clean up temp file
+          try {
+            if (fs.existsSync(tempFile)) {
+              fs.unlinkSync(tempFile);
+            }
+          } catch (e) {
+            this.logger.warn('Failed to delete temp file', { tempFile });
+          }
+
+          if (code === 0) {
+            const transcript = output.trim();
+            this.logger.info('Python Whisper transcription complete', {
+              transcriptLength: transcript.length
+            });
+            resolve(transcript);
+          } else {
+            this.logger.error('Python Whisper failed', {
+              code,
+              error: error || output
+            });
+            resolve(''); // Return empty on failure (graceful degradation)
+          }
+        });
+
+        python.on('error', (err) => {
+          this.logger.error('Failed to spawn Python Whisper', {
+            error: err.message
+          });
+
+          // Clean up temp file
+          try {
+            if (fs.existsSync(tempFile)) {
+              fs.unlinkSync(tempFile);
+            }
+          } catch (e) {
+            // Ignore cleanup errors
+          }
+
+          resolve(''); // Return empty on error
+        });
+      });
+    } catch (error: any) {
+      this.logger.error('Python Whisper fallback failed', {
+        error: error.message
+      });
+      return ''; // Return empty on failure
+    }
+  }
+
+  // STAGE 1: Create WAV header helper
+  private createWavHeader(dataLength: number, sampleRate: number): Buffer {
+    const header = Buffer.alloc(44);
+    const numChannels = 1; // Mono
+    const bitsPerSample = 16;
+    const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+    const blockAlign = numChannels * (bitsPerSample / 8);
+
+    // RIFF header
+    header.write('RIFF', 0);
+    header.writeUInt32LE(36 + dataLength, 4);
+    header.write('WAVE', 8);
+
+    // fmt chunk
+    header.write('fmt ', 12);
+    header.writeUInt32LE(16, 16); // fmt chunk size
+    header.writeUInt16LE(1, 20); // PCM format
+    header.writeUInt16LE(numChannels, 22);
+    header.writeUInt32LE(sampleRate, 24);
+    header.writeUInt32LE(byteRate, 28);
+    header.writeUInt16LE(blockAlign, 32);
+    header.writeUInt16LE(bitsPerSample, 34);
+
+    // data chunk
+    header.write('data', 36);
+    header.writeUInt32LE(dataLength, 40);
+
+    return header;
+  }
+
   // Buffer management for streaming
   private sessionBuffers: Map<string, Buffer[]> = new Map();
 
@@ -192,7 +351,7 @@ export class WhisperCppService {
         return;
       }
 
-      // Transcribe using the file-based method
+      // Transcribe using the file-based method (with API fallback)
       this.logger.info(`Whisper.cpp: Starting transcription for session ${sessionId}`);
       const transcript = await this.transcribe(sessionId, combinedBuffer, 16000);
       this.logger.info(`Whisper.cpp: Transcription complete for session ${sessionId}: "${transcript.substring(0, 50)}..."`);

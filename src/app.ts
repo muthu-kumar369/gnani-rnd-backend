@@ -101,6 +101,26 @@ import { vaultService } from './core/secrets/vault.service.js';
             // Non-fatal, continue startup
         }
 
+        // Stage 5: Initialize ChromaDB for vector search
+        try {
+            const { chromaDBService } = await import('./modules/vector/chromadb.service.js');
+            await chromaDBService.init();
+            logger.info('✅ ChromaDB initialized successfully');
+        } catch (error: any) {
+            logger.warn('⚠️  ChromaDB not available, vector search will be disabled', { error: error.message });
+            // Non-fatal, continue startup
+        }
+
+        // Stage 5: Initialize Tokenizer for embeddings
+        try {
+            const { tokenizerService } = await import('./modules/embeddings/tokenizer.service.js');
+            await tokenizerService.init();
+            logger.info('✅ Tokenizer initialized successfully');
+        } catch (error: any) {
+            logger.warn('⚠️  Tokenizer not available, using fallback', { error: error.message });
+            // Non-fatal, continue startup
+        }
+
         // Stage 4: Start memory monitoring
         try {
             const { MemoryMonitor } = await import('./core/monitoring/memory-monitor.js');

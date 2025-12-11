@@ -16,18 +16,6 @@ import sessionPersistence from './session.persistence.js';
 import assistantStateMachine from '../../core/state-machine/assistant.machine.js';
 import { AssistantEvent, AssistantState } from '../../core/state-machine/assistant-states.js';
 import { validateMessage } from '../conversation/message-validator.js'; // STAGE 1
-import { ContextBuilder } from './context.builder.js';
-import { LLMExecutor } from './llm.executor.js';
-import { ToolExecutor } from './tool.executor.js';
-import sessionMemory from '../memory/services/session-memory.service.js';
-import metrics from '../../core/monitoring/metrics.js';
-import auditService from '../../core/logger/audit.service.js';
-import { Logger } from 'winston';
-import Conversation from '../conversation/conversation.model.js';
-import ConversationMessage from '../memory/entities/conversation.entity.js';
-import sessionPersistence from './session.persistence.js';
-import assistantStateMachine from '../../core/state-machine/assistant.machine.js';
-import { AssistantEvent, AssistantState } from '../../core/state-machine/assistant-states.js';
 
 export interface Session {
     userId: string;

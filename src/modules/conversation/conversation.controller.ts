@@ -16,7 +16,12 @@ class ConversationController {
             const userId = req.user?.id;
             if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
-            const result = await conversationService.listConversations(userId, req.query);
+            const page = parseInt(String(req.query.page || '1'));
+            const limit = parseInt(String(req.query.limit || '20'));
+            const sortBy = req.query.sortBy ? String(req.query.sortBy) : undefined;
+            const sortOrder = req.query.sortOrder ? String(req.query.sortOrder) as 'asc' | 'desc' : undefined;
+
+            const result = await conversationService.listConversations(userId, { page, limit, sortBy, sortOrder });
             res.json(result);
         } catch (error) {
             console.error('Error listing conversations:', error);
@@ -53,6 +58,23 @@ class ConversationController {
             res.json(conversation);
         } catch (error) {
             console.error('Error getting conversation:', error);
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
+    }
+
+    async getMessages(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { id } = req.params;
+            const limit = parseInt(req.query.limit as string) || 50;
+            const before = req.query.before as string;
+
+            const result = await conversationService.getMessages(id, userId, { limit, before });
+            res.json(result);
+        } catch (error) {
+            console.error('Error fetching messages:', error);
             res.status(500).json({ error: 'Internal Server Error' });
         }
     }
@@ -277,6 +299,39 @@ class ConversationController {
         }
     }
 
+    // STAGE 1: Add attachments to conversation
+    async addAttachments(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { id } = req.params;
+            const files = req.files as Express.Multer.File[];
+
+            if (!files || files.length === 0) {
+                return res.status(400).json({ error: 'No files uploaded' });
+            }
+
+            // Process uploaded files and return file metadata
+            const attachments = files.map(file => ({
+                fileName: file.originalname,
+                fileSize: file.size,
+                mimeType: file.mimetype,
+                filePath: file.path,
+                uploadedAt: new Date()
+            }));
+
+            res.status(201).json({
+                message: 'Files uploaded successfully',
+                conversationId: id,
+                attachments
+            });
+        } catch (error: any) {
+            console.error('Error adding attachments:', error);
+            res.status(500).json({ error: error.message || 'Internal Server Error' });
+        }
+    }
+
     async getPromptTemplates(req: AuthenticatedRequest, res: Response) {
         try {
             res.json({ templates: PROMPT_TEMPLATES });
@@ -405,6 +460,58 @@ class ConversationController {
             if (error.message === 'Conversation not found') {
                 return res.status(404).json({ error: 'Conversation not found' });
             }
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
+    }
+
+    // STAGE 2: Undo/Restore endpoints
+    async restoreDeletedMessage(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { id } = req.params;
+            const { message } = req.body;
+
+            // Restore the deleted message
+            const restoredMessage = await conversationService.restoreDeletedMessage(id, message, userId);
+            res.json(restoredMessage);
+        } catch (error) {
+            console.error('Error restoring message:', error);
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
+    }
+
+    async updateMessageContent(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { id, messageId } = req.params;
+            const { content } = req.body;
+
+            // Update message content (for undo edit)
+            const updatedMessage = await conversationService.updateMessageContent(id, messageId, content, userId);
+            res.json(updatedMessage);
+        } catch (error) {
+            console.error('Error updating message content:', error);
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
+    }
+
+    async restoreGeneration(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { id } = req.params;
+            const { messageId, previousMessage } = req.body;
+
+            // Restore previous generation
+            const restoredMessage = await conversationService.restoreGeneration(id, messageId, previousMessage, userId);
+            res.json(restoredMessage);
+        } catch (error) {
+            console.error('Error restoring generation:', error);
             res.status(500).json({ error: 'Internal Server Error' });
         }
     }

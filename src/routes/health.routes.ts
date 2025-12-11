@@ -13,4 +13,7 @@ router.get('/ready', (req, res) => healthController.readiness(req, res));
 // Startup probe - has the app finished starting?
 router.get('/startup', (req, res) => healthController.startup(req, res));
 
+// STAGE 1: Comprehensive health check using service
+router.get('/health', (req, res) => healthController.health(req, res));
+
 export default router;

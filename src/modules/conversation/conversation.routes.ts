@@ -1,6 +1,8 @@
 import express from 'express';
 import conversationController from './conversation.controller.js';
 import { authMiddleware } from '../../core/security/auth.middleware.js';
+import { upload } from '../../config/multer.config.js'; // STAGE 1: For file uploads
+import { validateFileUpload } from '../../middleware/file-validation.middleware.js'; // STAGE 1
 
 import { validate } from '../../middleware/zod.middleware.js';
 import {
@@ -58,6 +60,16 @@ router.post('/:id/cancel-stream', conversationController.cancelStream);
 // Send message (Text Chat)
 router.post('/:id/messages', conversationController.sendMessage);
 
+// Get paginated messages
+router.get('/:id/messages', conversationController.getMessages);
+
+// STAGE 1: Add attachments to conversation
+router.post('/:id/attachments',
+    upload.array('files', 10), // Allow up to 10 files
+    validateFileUpload('document'), // Validate file size and type
+    conversationController.addAttachments
+);
+
 // Get prompt templates
 router.get('/prompt-templates', conversationController.getPromptTemplates);
 
@@ -73,5 +85,10 @@ router.patch('/:id/model', conversationController.updateModel);
 // Export conversation
 router.get('/:id/export/markdown', conversationController.exportMarkdown);
 router.get('/:id/export/json', conversationController.exportJson);
+
+// STAGE 2: Additional undo/restore endpoints
+router.patch('/:id/messages/:messageId', conversationController.updateMessageContent);
+router.post('/:id/messages/restore', conversationController.restoreDeletedMessage);
+router.post('/:id/messages/restore-generation', conversationController.restoreGeneration);
 
 export default router;

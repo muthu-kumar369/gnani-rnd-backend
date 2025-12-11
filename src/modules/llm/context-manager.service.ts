@@ -119,6 +119,60 @@ export class ContextManager {
         };
     }
 
+    // STAGE 5: Advanced context compression with summarization
+    async compress(messages: Message[], maxMessages: number = 10): Promise<Message[]> {
+        if (messages.length <= maxMessages) {
+            return messages;
+        }
+
+        logger.info('Compressing context (Stage 5)', {
+            originalLength: messages.length,
+            targetLength: maxMessages
+        });
+
+        const recentCount = 5;
+        const recent = messages.slice(-recentCount);
+        const older = messages.slice(0, -recentCount);
+
+        if (older.length === 0) {
+            return messages;
+        }
+
+        // Summarize older messages
+        const summary = this.summarizeMessages(older);
+
+        const compressed = [
+            {
+                role: 'system' as const,
+                content: `Previous conversation summary: ${summary}`
+            },
+            ...recent
+        ];
+
+        logger.info('Context compressed', {
+            from: messages.length,
+            to: compressed.length
+        });
+
+        return compressed;
+    }
+
+    private summarizeMessages(messages: Message[]): string {
+        const conversation = messages
+            .map(m => `${m.role}: ${m.content}`)
+            .join('\n');
+
+        // Simple extractive summarization
+        const sentences = conversation.split(/[.!?]+/).filter(s => s.trim().length > 0);
+
+        const summary = [
+            ...sentences.slice(0, 2),
+            ...sentences.slice(-2)
+        ].join('. ') + '.';
+
+        return summary;
+    }
+
     cleanup() {
         if (this.encoder && this.encoder.free) {
             this.encoder.free();

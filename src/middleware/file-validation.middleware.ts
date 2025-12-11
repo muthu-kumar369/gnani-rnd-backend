@@ -2,7 +2,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { FILE_SIZE_LIMITS, ALLOWED_MIME_TYPES } from '../config/multer.config.js';
 
-export const validateFileUpload = (fileType: 'image' | 'document' | 'audio' = 'default') => {
+export const validateFileUpload = (fileType: 'image' | 'document' | 'audio' = 'document') => {
     return (req: Request, res: Response, next: NextFunction) => {
         if (!req.file && !req.files) {
             return res.status(400).json({ error: 'No file uploaded' });
@@ -24,13 +24,11 @@ export const validateFileUpload = (fileType: 'image' | 'document' | 'audio' = 'd
             }
 
             // Check MIME type
-            if (fileType !== 'default') {
-                const allowedTypes = ALLOWED_MIME_TYPES[fileType];
-                if (allowedTypes && !allowedTypes.includes(file.mimetype)) {
-                    return res.status(400).json({
-                        error: `Invalid file type: ${file.mimetype}. Allowed: ${allowedTypes.join(', ')}`
-                    });
-                }
+            const allowedTypes = ALLOWED_MIME_TYPES[fileType];
+            if (allowedTypes && !allowedTypes.includes(file.mimetype)) {
+                return res.status(400).json({
+                    error: `Invalid file type: ${file.mimetype}. Allowed: ${allowedTypes.join(', ')}`
+                });
             }
         }
 
