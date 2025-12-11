@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import redisClient from '../../config/redis.config.js';
 import { BatchProcessor } from '../../core/batching/batch-processor.js';
 import { CircuitBreaker } from '../../core/reliability/circuit-breaker.js';
+import { executeWithRecovery } from '../../core/utils/error-recovery.utils.js';
 
 export class VectorManager {
     private client: ChromaClient | null = null;
@@ -151,47 +152,53 @@ export class VectorManager {
         }
 
         try {
-            // Stage 2: Wrap with circuit breaker
-            return await this.chromaCircuitBreaker.execute(async () => {
-                // Check cache first
-                const cacheKey = this.getCacheKey(userId, query, topK);
-                const cachedResults = await redisClient.get(cacheKey);
+            // Stage 2: Wrap with circuit breaker and recovery
+            return await executeWithRecovery(async () => {
+                return await this.chromaCircuitBreaker.execute(async () => {
+                    // Check cache first
+                    const cacheKey = this.getCacheKey(userId, query, topK);
+                    const cachedResults = await redisClient.get(cacheKey);
 
-                if (cachedResults) {
-                    const results = JSON.parse(cachedResults);
-                    logger.debug(`Vector search - Cache HIT for query "${query.substring(0, 50)}..."`);
-                    return results;
-                }
+                    if (cachedResults) {
+                        const results = JSON.parse(cachedResults);
+                        logger.debug(`Vector search - Cache HIT for query "${query.substring(0, 50)}..."`);
+                        return results;
+                    }
 
-                logger.debug(`Vector search - Cache MISS for query "${query.substring(0, 50)}..."`);
+                    logger.debug(`Vector search - Cache MISS for query "${query.substring(0, 50)}..."`);
 
-                // Cache miss - generate embedding and search
-                const queryEmbedding = await this.generateEmbedding(query);
+                    // Cache miss - generate embedding and search
+                    const queryEmbedding = await this.generateEmbedding(query);
 
-                // Add timeout to vector search
-                const searchPromise = this.collection!.query({
-                    queryEmbeddings: [queryEmbedding],
-                    nResults: topK,
-                    where: { userId: userId },
+                    // Add timeout to vector search
+                    const searchPromise = this.collection!.query({
+                        queryEmbeddings: [queryEmbedding],
+                        nResults: topK,
+                        where: { userId: userId },
+                    });
+
+                    const timeoutPromise = new Promise<any>((_, reject) =>
+                        setTimeout(() => reject(new Error('Vector search timed out')), 2000)
+                    );
+
+                    const results = await Promise.race([searchPromise, timeoutPromise]);
+
+                    let documents: string[] = [];
+                    if (results.documents && results.documents.length > 0 && results.documents[0]) {
+                        documents = results.documents[0] as string[];
+                        logger.debug(`Retrieved ${documents.length} relevant embeddings for query "${query}"`);
+                    }
+
+                    // Cache results for 1 hour (3600 seconds)
+                    await redisClient.setex(cacheKey, 3600, JSON.stringify(documents));
+                    logger.debug(`Cached vector search results for query "${query.substring(0, 50)}..."`);
+
+                    return documents;
                 });
-
-                const timeoutPromise = new Promise<any>((_, reject) =>
-                    setTimeout(() => reject(new Error('Vector search timed out')), 2000)
-                );
-
-                const results = await Promise.race([searchPromise, timeoutPromise]);
-
-                let documents: string[] = [];
-                if (results.documents && results.documents.length > 0 && results.documents[0]) {
-                    documents = results.documents[0] as string[];
-                    logger.debug(`Retrieved ${documents.length} relevant embeddings for query "${query}"`);
-                }
-
-                // Cache results for 1 hour (3600 seconds)
-                await redisClient.setex(cacheKey, 3600, JSON.stringify(documents));
-                logger.debug(`Cached vector search results for query "${query.substring(0, 50)}..."`);
-
-                return documents;
+            }, {
+                context: 'Vector Search (Relevant Embeddings)',
+                retries: 2,
+                onError: (err) => logger.warn(`Vector search attempt failed: ${err.message}`)
             });
         } catch (error: any) {
             logger.error(`Error retrieving embeddings: ${error.message}`);
@@ -210,36 +217,42 @@ export class VectorManager {
         }
 
         try {
-            return await this.chromaCircuitBreaker.execute(async () => {
-                const queryEmbedding = await this.generateEmbedding(query);
+            return await executeWithRecovery(async () => {
+                return await this.chromaCircuitBreaker.execute(async () => {
+                    const queryEmbedding = await this.generateEmbedding(query);
 
-                const where = Object.keys(filters).length > 0 ? filters : undefined;
+                    const where = Object.keys(filters).length > 0 ? filters : undefined;
 
-                const results = await this.collection!.query({
-                    queryEmbeddings: [queryEmbedding],
-                    nResults: limit,
-                    where: where,
-                });
+                    const results = await this.collection!.query({
+                        queryEmbeddings: [queryEmbedding],
+                        nResults: limit,
+                        where: where,
+                    });
 
-                const output: Array<{ id: string; document: string; distance: number; metadata: any }> = [];
+                    const output: Array<{ id: string; document: string; distance: number; metadata: any }> = [];
 
-                if (results.ids && results.ids.length > 0 && results.ids[0]) {
-                    const ids = results.ids[0];
-                    const documents = results.documents?.[0] || [];
-                    const distances = results.distances?.[0] || [];
-                    const metadatas = results.metadatas?.[0] || [];
+                    if (results.ids && results.ids.length > 0 && results.ids[0]) {
+                        const ids = results.ids[0];
+                        const documents = results.documents?.[0] || [];
+                        const distances = results.distances?.[0] || [];
+                        const metadatas = results.metadatas?.[0] || [];
 
-                    for (let i = 0; i < ids.length; i++) {
-                        output.push({
-                            id: ids[i],
-                            document: documents[i] || '',
-                            distance: distances[i] || 0,
-                            metadata: metadatas[i] || {}
-                        });
+                        for (let i = 0; i < ids.length; i++) {
+                            output.push({
+                                id: ids[i],
+                                document: documents[i] || '',
+                                distance: distances[i] || 0,
+                                metadata: metadatas[i] || {}
+                            });
+                        }
                     }
-                }
 
-                return output;
+                    return output;
+                });
+            }, {
+                context: 'Vector Semantic Search',
+                retries: 2,
+                onError: (err) => logger.warn(`Semantic search attempt failed: ${err.message}`)
             });
         } catch (error: any) {
             logger.error(`Error in vector search: ${error.message}`);
@@ -254,14 +267,20 @@ export class VectorManager {
         }
 
         try {
-            const embedding = await this.generateEmbedding(documentContent);
-            await this.collection.add({
-                embeddings: [embedding],
-                metadatas: [{ userId: userId, ...metadata }],
-                documents: [documentContent],
-                ids: [documentId]
+            await executeWithRecovery(async () => {
+                const embedding = await this.generateEmbedding(documentContent);
+                await this.collection!.add({
+                    embeddings: [embedding],
+                    metadatas: [{ userId: userId, ...metadata }],
+                    documents: [documentContent],
+                    ids: [documentId]
+                });
+                logger.debug(`Embedding added for user ${userId}, documentId ${documentId}`);
+            }, {
+                context: 'Vector Add Embedding',
+                retries: 3, // Retry more for writes
+                onError: (err) => logger.warn(`Add embedding failed: ${err.message}`)
             });
-            logger.debug(`Embedding added for user ${userId}, documentId ${documentId}`);
         } catch (error: any) {
             logger.error(`Error adding embedding: ${error.message}`);
         }

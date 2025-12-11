@@ -3,6 +3,7 @@
 import cron from 'node-cron';
 import { createContextualLogger } from '../core/logger/logger.js';
 import { Analytics } from '../models/analytics.model.js';
+import { AnalyticsAggregated } from '../models/analytics-aggregated.model.js';
 
 const logger = createContextualLogger({ module: 'AnalyticsCleanupJob' });
 
@@ -147,14 +148,23 @@ export class AnalyticsCleanupJob {
                 };
             });
 
-            // Store aggregated data (could save to separate collection)
+
+
+            // Store aggregated data
             logger.debug('Aggregated data summary', {
                 totalDays: processed.length,
                 totalEvents: processed.reduce((sum: number, r: AggregatedData) => sum + r.totalEvents, 0)
             });
 
-            // TODO: Save aggregated data to AnalyticsAggregated collection
-            // await AnalyticsAggregated.insertMany(processed);
+            if (processed.length > 0) {
+                try {
+                    await AnalyticsAggregated.insertMany(processed, { ordered: false });
+                    logger.info(`Saved ${processed.length} aggregated records`);
+                } catch (err: any) {
+                    // Even if some fail (e.g. duplicates), continue
+                    logger.warn(`Some aggregated records failed to save: ${err.message}`);
+                }
+            }
 
             return processed;
         } catch (error: any) {

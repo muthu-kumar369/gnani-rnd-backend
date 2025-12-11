@@ -82,6 +82,9 @@ router.patch('/:id/template', conversationController.updateTemplate);
 // Update model
 router.patch('/:id/model', conversationController.updateModel);
 
+// Share conversation
+router.post('/:id/share', conversationController.shareConversation);
+
 // Export conversation
 router.get('/:id/export/markdown', conversationController.exportMarkdown);
 router.get('/:id/export/json', conversationController.exportJson);

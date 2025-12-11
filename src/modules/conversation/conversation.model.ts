@@ -10,6 +10,9 @@ export interface IConversation extends Document {
     folderId?: string;         // Folder ID (STAGE R6)
     tags?: string[];           // Tags (STAGE R6)
     isDeleted: boolean;
+    messageCount: number;
+    shareId?: string;
+    shareExpiresAt?: Date;
     metadata: Record<string, any>;
     createdAt: Date;
     updatedAt: Date;
@@ -58,6 +61,21 @@ const conversationSchema = new Schema({
     isDeleted: {
         type: Boolean,
         default: false,
+        index: true
+    },
+    messageCount: {
+        type: Number,
+        default: 0,
+        index: true
+    },
+    shareId: {
+        type: String,
+        unique: true,
+        sparse: true,
+        index: true
+    },
+    shareExpiresAt: {
+        type: Date,
         index: true
     },
     metadata: {

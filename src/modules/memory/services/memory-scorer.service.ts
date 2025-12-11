@@ -12,6 +12,7 @@ interface Memory {
     relevanceScore: number;
     summary: string;
     userId: string;
+    userRating?: number;
 }
 
 export class MemoryScorerService {
@@ -28,21 +29,28 @@ export class MemoryScorerService {
         const recencyScore = Math.max(0, 30 - ageInDays);
         score += recencyScore;
 
-        // Frequency (0-30 points)
-        // Memories accessed more often get higher scores
-        const frequencyScore = Math.min(30, (memory.accessCount || 0) * 3);
+        // Frequency (0-25 points)
+        // Memories accessed more often get higher scores (max 25)
+        const frequencyScore = Math.min(25, (memory.accessCount || 0) * 5);
         score += frequencyScore;
 
-        // Relevance (0-40 points)
-        // Based on relevance score from vector search or manual tagging
-        const relevanceScore = (memory.relevanceScore || 0) * 40;
+        // Relevance (0-25 points)
+        // Based on relevance score from vector search
+        const relevanceScore = (memory.relevanceScore || 0) * 25;
         score += relevanceScore;
+
+        // User Rating (0-20 points)
+        // Explicit user rating (0-5 stars mapped to 0-20)
+        // If userRating is 0 or undefined, this contributes 0
+        const ratingScore = (memory.userRating || 0) * 4;
+        score += ratingScore;
 
         logger.debug('Memory scored', {
             memoryId: memory._id,
             recency: recencyScore.toFixed(2),
             frequency: frequencyScore.toFixed(2),
             relevance: relevanceScore.toFixed(2),
+            rating: ratingScore.toFixed(2),
             total: score.toFixed(2)
         });
 
@@ -78,8 +86,9 @@ export class MemoryScorerService {
                     accessCount: (m.metadata as any)?.accessCount || 0,
                     relevanceScore: (m.metadata as any)?.relevanceScore || 0.5,
                     summary: m.summary,
-                    userId: m.userId
-                })
+                    userId: m.userId,
+                    userRating: (m as any).userRating
+                } as Memory)
             }));
 
             // Sort by score (highest first)

@@ -11,6 +11,7 @@ export interface IConversationSummary extends Document {
     topics: string[];
     embeddingId?: string; // Reference to ChromaDB embedding ID
     embeddingStatus: 'pending' | 'processing' | 'completed' | 'failed';
+    userRating: number; // 0-5 rating, default 0
     metadata: {
         intents?: string[];
         actions?: any[];
@@ -60,6 +61,12 @@ const conversationSummarySchema = new Schema({
         enum: ['pending', 'processing', 'completed', 'failed'],
         default: 'pending',
         index: true
+    },
+    userRating: {
+        type: Number,
+        default: 0,
+        min: 0,
+        max: 5
     },
     metadata: {
         type: Schema.Types.Mixed,

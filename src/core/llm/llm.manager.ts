@@ -41,14 +41,8 @@ export class LLMManager {
         });
     }
 
-    /**
-     * Generate with automatic failover to backup providers
-     * Tries all providers in sequence if one fails
-     */
-    async *generateWithFailover(
-        prompt: string,
-        options?: GenerateOptions
-    ): AsyncIterableIterator<LLMResponse> {
+    // Main generation method with automatic failover
+    async *generate(prompt: string, options?: GenerateOptions): AsyncIterableIterator<LLMResponse> {
         const maxAttempts = this.providerList.length;
         let lastError: Error | null = null;
 
@@ -71,10 +65,10 @@ export class LLMManager {
                 return; // Success, exit
             } catch (error: any) {
                 lastError = error;
-                logger.warn('Provider failed, trying next', {
-                    provider: provider.name,
+                logger.warn(`[FAILOVER] Provider ${provider.name} failed (Attempt ${attempt + 1}/${maxAttempts}). Switching to next provider...`, {
+                    failedProvider: provider.name,
                     error: error.message,
-                    attempt: attempt + 1
+                    nextProvider: this.providerList[(this.currentProviderIndex + 1) % this.providerList.length].name
                 });
 
                 // Rotate to next provider
@@ -91,38 +85,61 @@ export class LLMManager {
         throw lastError || new Error('All LLM providers failed');
     }
 
-    // Main generation method
-    async *generate(prompt: string, options?: GenerateOptions): AsyncIterableIterator<LLMResponse> {
-        const available = await this.currentProvider.isAvailable();
-        if (!available) {
-            throw new Error(`LLM provider ${this.currentProvider.name} is not available`);
-        }
-
-        logger.debug('Generating response', {
-            provider: this.currentProvider.name,
-            promptLength: prompt.length
-        });
-
-        yield* this.currentProvider.generate(prompt, options);
+    /**
+     * Legacy method for explicit failover call (deprecated, use generate instead)
+     */
+    async *generateWithFailover(
+        prompt: string,
+        options?: GenerateOptions
+    ): AsyncIterableIterator<LLMResponse> {
+        yield* this.generate(prompt, options);
     }
 
     // Generation with tools
+    // Generation with tools with automatic failover
     async *generateWithTools(
         prompt: string,
         tools: Tool[],
         options?: GenerateOptions
     ): AsyncIterableIterator<LLMResponse> {
-        const available = await this.currentProvider.isAvailable();
-        if (!available) {
-            throw new Error(`LLM provider ${this.currentProvider.name} is not available`);
+        const maxAttempts = this.providerList.length;
+        let lastError: Error | null = null;
+
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            const provider = this.providerList[this.currentProviderIndex];
+
+            try {
+                const available = await provider.isAvailable();
+                if (!available) {
+                    throw new Error(`Provider ${provider.name} is not available`);
+                }
+
+                logger.debug('Generating with tools', {
+                    provider: provider.name,
+                    toolCount: tools.length,
+                    attempt: attempt + 1
+                });
+
+                yield* provider.generateWithTools(prompt, tools, options);
+                return; // Success
+            } catch (error: any) {
+                lastError = error;
+                logger.warn(`[FAILOVER] Provider ${provider.name} failed during tool generation (Attempt ${attempt + 1}/${maxAttempts}). Switching...`, {
+                    failedProvider: provider.name,
+                    error: error.message
+                });
+
+                // Rotate
+                this.currentProviderIndex = (this.currentProviderIndex + 1) % this.providerList.length;
+                this.currentProvider = this.providerList[this.currentProviderIndex];
+
+                if (attempt === maxAttempts - 1) {
+                    throw new Error('All LLM providers failed during tool generation');
+                }
+            }
         }
 
-        logger.debug('Generating with tools', {
-            provider: this.currentProvider.name,
-            toolCount: tools.length
-        });
-
-        yield* this.currentProvider.generateWithTools(prompt, tools, options);
+        throw lastError || new Error('All LLM providers failed');
     }
 
     // Check health of current provider

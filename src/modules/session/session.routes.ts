@@ -154,10 +154,47 @@ router.get('/user/:userId', validate(userIdParamSchema), async (req, res) => {
 
 
 /**
- * Replay a session
- * POST /api/session/:sessionId/replay
- * Body: { speed?: number }
+ * List all sessions with recorded events
+ * GET /api/session/replay/list
  */
+import { SessionEvent } from './session-event.model.js';
+
+router.get('/replay/list', async (req, res) => {
+    try {
+        // Aggregate distinct sessionIds from events
+        // In real system, we'd query a Sessions collection, but replay might be for ephemeral ones too.
+        // Let's use aggregate on events to find unique sessions.
+        const sessions = await SessionEvent.aggregate([
+            {
+                $group: {
+                    _id: '$sessionId',
+                    eventCount: { $sum: 1 },
+                    startTime: { $min: '$timestamp' },
+                    endTime: { $max: '$timestamp' },
+                    lastEventType: { $last: '$type' }
+                }
+            },
+            { $sort: { startTime: -1 } },
+            { $limit: 50 }
+        ]);
+
+        res.json({
+            success: true,
+            count: sessions.length,
+            sessions: sessions.map(s => ({
+                sessionId: s._id,
+                eventCount: s.eventCount,
+                startTime: s.startTime,
+                endTime: s.endTime,
+                status: s.lastEventType
+            }))
+        });
+    } catch (error: any) {
+        logger.error(`Failed to list replay sessions: ${error.message}`);
+        res.status(500).json({ success: false, error: 'Failed to list replay sessions' });
+    }
+});
+
 import sessionReplayService from './session-replay.service.js';
 
 router.post('/:sessionId/replay', validate(replayRequestSchema), async (req, res) => {

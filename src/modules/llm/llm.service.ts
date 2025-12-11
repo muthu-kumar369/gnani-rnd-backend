@@ -1,5 +1,6 @@
-// src/services/llmService.ts
+// src/modules/llm/llm.service.ts
 import { createContextualLogger } from '../../core/logger/logger.js';
+import sessionReplayService from '../session/session-replay.service.js';
 import metrics from '../../core/monitoring/metrics.js';
 import auditService from '../../core/logger/audit.service.js';
 import latencyMonitor from '../../core/monitoring/latency.monitor.js';
@@ -17,11 +18,16 @@ import { piiDetector } from '../../core/security/pii-detector.service.js';
 import { securityAudit } from '../../core/logger/security-audit.service.js';
 import deduplicationService from '../../core/cache/deduplication.service.js'; // Stage 4
 import { ContextManager } from './context-manager.service.js'; // STAGE 1
+import { executeWithRecovery } from '../../core/utils/error-recovery.utils.js';
 
 // Import LLM Manager
 import { llmManager } from '../../core/llm/llm.manager.js';
 import { Tool } from '../../core/llm/llm.interface.js';
 import multiStepPlanner from '../planner/multi-step-planner.service.js'; // STAGE 3: Multi-step planning
+import { TitleGeneratorHelper } from './helpers/title-generator.helper.js';
+import { ToolDecisionHelper } from './helpers/tool-decision.helper.js';
+import { PromptHelper } from './helpers/prompt.helper.js';
+import { SynthesisHelper } from './helpers/synthesis.helper.js';
 
 // TODO Stage 4: Wrap getLlmResponse cache check (line 181-192) with:
 // deduplicationService.deduplicate(dedupKey, async () => { /* cache check + LLM call */ }, 5*60*1000)
@@ -30,6 +36,10 @@ class LlmService {
     private logger: Logger;
     private circuitBreaker: CircuitBreaker;
     private contextManager: ContextManager; // STAGE 1: Context window management
+    private titleGenerator: TitleGeneratorHelper;
+    private toolDecisionHelper: ToolDecisionHelper;
+    private promptHelper: PromptHelper;
+    private synthesisHelper: SynthesisHelper;
 
     constructor() {
         this.logger = createContextualLogger({ module: 'LlmService' });
@@ -44,7 +54,14 @@ class LlmService {
         });
 
         // STAGE 1: Initialize context manager with model token limits
+        // STAGE 1: Initialize context manager with model token limits
         this.contextManager = new ContextManager('gpt-3.5-turbo', config.LLM_MAX_TOKENS);
+
+        // Initialize Helpers
+        this.titleGenerator = new TitleGeneratorHelper(this.logger);
+        this.toolDecisionHelper = new ToolDecisionHelper(this.logger);
+        this.promptHelper = new PromptHelper(this.logger);
+        this.synthesisHelper = new SynthesisHelper(this.logger);
 
         this.logger.info('LlmService initialized with Circuit Breaker (Unified Backend).');
         auditService.logEvent('LLM_SERVICE_INIT', null, null, {}, 'success');
@@ -60,8 +77,12 @@ class LlmService {
             /find.*and.*compare/i,
             /gather.*information.*about/i,
             /step by step/i,
-            /first.*then.*finally/i,
-            /multiple.*steps/i
+            /first.*then/i,
+            /start by.*then/i,
+            /multiple.*steps/i,
+            /several things/i,
+            /and also/i,
+            /chain of thought/i
         ];
 
         return complexityIndicators.some(pattern => pattern.test(query));
@@ -91,95 +112,11 @@ class LlmService {
     }
 
     async getToolDecision(decisionPrompt: any, preferredModel?: string): Promise<{ needs_tool: boolean, tool_name?: string, parameters?: any }> {
-        const sessionId = decisionPrompt.session_id;
-        this.logger.debug(`Getting tool decision for session ${sessionId}`);
-
-        return traceAsyncOperation('llm.getToolDecision', async () => {
-            try {
-                // Format prompt 
-                const promptText = `System: ${decisionPrompt.system_message}\n\nUser: ${decisionPrompt.user_query}`;
-
-                // Use LLM Manager
-                // We use generating logic expecting JSON
-                const options = {
-                    model: this.getModelPath(preferredModel),
-                    maxTokens: 200,
-                    temperature: 0.1,
-                    stream: false,
-                    stopSequences: ["User:", "System:"]
-                };
-
-                let content = '';
-                const iterator = llmManager.generate(promptText, options);
-
-                for await (const chunk of iterator) {
-                    content += chunk.text;
-                }
-
-                // Parse JSON
-                const markdownMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-                if (markdownMatch) {
-                    content = markdownMatch[1];
-                } else {
-                    const firstBrace = content.indexOf('{');
-                    const lastBrace = content.lastIndexOf('}');
-                    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-                        content = content.substring(firstBrace, lastBrace + 1);
-                    }
-                }
-
-                try {
-                    const decision = JSON.parse(content);
-                    this.logger.info(`Tool decision for session ${sessionId}: ${JSON.stringify(decision)}`);
-                    return decision;
-                } catch (e) {
-                    this.logger.warn(`Failed to parse tool decision JSON: ${content}`);
-                    return { needs_tool: false };
-                }
-
-            } catch (error: any) {
-                this.logger.error(`Error getting tool decision: ${error.message}`);
-                return { needs_tool: false };
-            }
-        }, { 'session.id': sessionId, 'model': preferredModel || 'default' });
+        return this.toolDecisionHelper.getToolDecision(decisionPrompt, this.getModelPath(preferredModel));
     }
 
     async generateTitle(conversationContext: string): Promise<string> {
-        this.logger.debug('Generating conversation title');
-
-        return traceAsyncOperation('llm.generateTitle', async () => {
-            try {
-                const systemPrompt = `You are a title generator. Given a conversation excerpt, generate a concise, descriptive title (max 60 characters). Output only the title, nothing else.`;
-                const userPrompt = `Conversation:\n${conversationContext}\n\nGenerate a title:`;
-                const promptText = `${systemPrompt}\n\n${userPrompt}`;
-
-                let title = '';
-                const iterator = llmManager.generate(promptText, {
-                    maxTokens: 20,
-                    temperature: 0.3,
-                    stream: false,
-                    stopSequences: ["\n", "User:", "Assistant:"]
-                });
-
-                for await (const chunk of iterator) {
-                    title += chunk.text;
-                }
-
-                title = title.trim().replace(/^["']|["']$/g, '');
-
-                if (title.length > 60) title = title.substring(0, 57) + '...';
-
-                if (!title || title.length < 3) return 'New Conversation';
-
-                metrics.incLlmCall('title-generation', 'title_generation', 'success');
-                return title;
-
-            } catch (error: any) {
-                this.logger.error(`Error generating title: ${error.message}`);
-                metrics.incLlmCall('title-generation', 'title_generation', 'failure');
-                return 'New Conversation';
-            }
-        }, { 'context.length': conversationContext.length });
+        return this.titleGenerator.generateTitle(conversationContext);
     }
 
     async getLlmResponse(structuredPrompt: any, onPartialResponse: ((response: { text: string }) => Promise<void> | void) | null = null, preferredModel?: string): Promise<{ text: string, action: any, tokenUsage?: TokenUsage }> {
@@ -198,11 +135,20 @@ class LlmService {
                         { userId, sessionId }
                     );
                     const executedPlan = await multiStepPlanner.executePlan(plan);
-                    const result = executedPlan.steps
-                        .filter(s => s.status === 'completed')
-                        .map(s => `Step: ${s.description}\nResult: ${JSON.stringify(s.result)}`)
-                        .join('\n\n');
-                    return { text: result, action: null };
+
+                    // Synthesize final response
+                    let synthesis = await this.synthesizeFromPlan(executedPlan, structuredPrompt.current_user_query, preferredModel);
+
+                    // PII Masking
+                    if (process.env.PII_MASKING_ENABLED === 'true' && synthesis) {
+                        synthesis = piiDetector.maskPII(synthesis);
+                    }
+
+                    // Log success
+                    metrics.incLlmCall(sessionId, 'planning', 'success');
+                    auditService.logLlmEvent(userId, sessionId, structuredPrompt, { text: synthesis, action: null }, 'success');
+
+                    return { text: synthesis, action: null };
                 } catch (error: any) {
                     this.logger.warn('Multi-step planning failed, falling back to standard LLM', { error: error.message });
                     // Fall through to standard LLM processing
@@ -275,79 +221,93 @@ class LlmService {
         userId: string
     ): Promise<{ text: string, action: any, tokenUsage?: TokenUsage }> {
         try {
+
+
             const formattedPrompt = this._formatPromptForLLM(structuredPrompt);
 
-            // Unified Generation via LLMManager
-            return await this.circuitBreaker.execute(async () => {
-                let llmOutput = '';
-                let action = null;
-                let tokenUsage: TokenUsage | undefined;
+            // Unified Generation via LLMManager with Recovery
+            return await executeWithRecovery(async () => {
+                return await this.circuitBreaker.execute(async () => {
+                    let llmOutput = '';
+                    let action = null;
+                    let tokenUsage: TokenUsage | undefined;
 
-                latencyMonitor.startTimer(sessionId, 'llm_total');
-                latencyMonitor.startTimer(sessionId, 'llm_ttft');
-                let firstTokenReceived = false;
+                    latencyMonitor.startTimer(sessionId, 'llm_total');
+                    latencyMonitor.startTimer(sessionId, 'llm_ttft');
+                    let firstTokenReceived = false;
 
-                const options = {
-                    model: this.getModelPath(preferredModel),
-                    maxTokens: config.LLM_MAX_TOKENS,
-                    temperature: config.LLM_TEMPERATURE,
-                    stream: true, // Always stream
-                    stopSequences: ["User:", "System:", "Assistant:", "\nUser:", "\nAssistant:"]
-                };
+                    const options = {
+                        model: this.getModelPath(preferredModel),
+                        maxTokens: config.LLM_MAX_TOKENS,
+                        temperature: config.LLM_TEMPERATURE,
+                        stream: true, // Always stream
+                        stopSequences: ["User:", "System:", "Assistant:", "\nUser:", "\nAssistant:"]
+                    };
 
-                const iterator = llmManager.generateWithFailover(formattedPrompt, options);
+                    const iterator = llmManager.generateWithFailover(formattedPrompt, options);
 
-                for await (const chunk of iterator) {
-                    const newContent = chunk.text;
-                    llmOutput += newContent;
+                    for await (const chunk of iterator) {
+                        const newContent = chunk.text;
+                        llmOutput += newContent;
 
-                    if (!firstTokenReceived && newContent.trim().length > 0) {
-                        latencyMonitor.endTimer(sessionId, 'llm_ttft');
-                        firstTokenReceived = true;
+                        if (!firstTokenReceived && newContent.trim().length > 0) {
+                            latencyMonitor.endTimer(sessionId, 'llm_ttft');
+                            firstTokenReceived = true;
+                        }
+
+                        // Usage tracking
+                        if (chunk.usage) {
+                            tokenUsage = tokenCounterService.createUsage(
+                                chunk.usage.promptTokens,
+                                chunk.usage.completionTokens,
+                                options.model
+                            );
+                        }
+
+                        if (onPartialResponse && newContent) {
+                            // Directly stream what we get from provider
+                            // @ts-ignore
+                            await onPartialResponse({ type: 'partial', text: newContent });
+                        }
                     }
 
-                    // Usage tracking
-                    if (chunk.usage) {
-                        tokenUsage = tokenCounterService.createUsage(
-                            chunk.usage.promptTokens,
-                            chunk.usage.completionTokens,
-                            options.model
-                        );
-                    }
-
-                    if (onPartialResponse && newContent) {
-                        // Directly stream what we get from provider
+                    if (onPartialResponse) {
                         // @ts-ignore
-                        await onPartialResponse({ type: 'partial', text: newContent });
+                        await onPartialResponse({ type: 'final', text: '' }); // Final signal
                     }
-                }
 
-                if (onPartialResponse) {
-                    // @ts-ignore
-                    await onPartialResponse({ type: 'final', text: '' }); // Final signal
-                }
+                    latencyMonitor.endTimer(sessionId, 'llm_total');
 
-                latencyMonitor.endTimer(sessionId, 'llm_total');
+                    // Check for simple actions (heuristic)
+                    if (structuredPrompt.classified_intent === 'system_command') {
+                        action = { action: 'OPEN_APP', app_name: 'Terminal' };
+                    }
 
-                // Check for simple actions (heuristic)
-                if (structuredPrompt.classified_intent === 'system_command') {
-                    action = { action: 'OPEN_APP', app_name: 'Terminal' };
-                }
+                    metrics.incLlmCall(sessionId, structuredPrompt.classified_intent, 'success');
+                    auditService.logLlmEvent(userId, sessionId, structuredPrompt, { text: llmOutput, action }, 'success');
 
-                metrics.incLlmCall(sessionId, structuredPrompt.classified_intent, 'success');
-                auditService.logLlmEvent(userId, sessionId, structuredPrompt, { text: llmOutput, action }, 'success');
+                    // Cache response
+                    try {
+                        await redis.setex(cacheKey, 3600, JSON.stringify({ text: llmOutput, action }));
+                    } catch (e) { }
 
-                // Cache response
-                try {
-                    await redis.setex(cacheKey, 3600, JSON.stringify({ text: llmOutput, action }));
-                } catch (e) { }
+                    // PII Masking
+                    if (process.env.PII_MASKING_ENABLED === 'true' && llmOutput) {
+                        llmOutput = piiDetector.maskPII(llmOutput);
+                    }
 
-                // PII Masking
-                if (process.env.PII_MASKING_ENABLED === 'true' && llmOutput) {
-                    llmOutput = piiDetector.maskPII(llmOutput);
-                }
+                    // STAGE 3: Record Assistant Event for Replay
+                    sessionReplayService.recordEvent(sessionId, 'llm_response', {
+                        text: llmOutput,
+                        tokenUsage
+                    });
 
-                return { text: llmOutput, action, tokenUsage };
+                    return { text: llmOutput, action, tokenUsage };
+                });
+            }, {
+                retries: 1, // Only retry once since we have internal failover
+                context: `LLM Generation (${sessionId})`,
+                onError: (err: any) => this.logger.warn(`LLM generation attempt failed: ${err.message}`)
             });
 
         } catch (error: any) {
@@ -362,54 +322,11 @@ class LlmService {
     }
 
     private _formatPromptForLLM(structuredPrompt: any): string {
-        // STAGE 1: Build messages array for context manager
-        const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [];
+        return this.promptHelper.formatPrompt(structuredPrompt, this.contextManager);
+    }
 
-        // Add conversation history
-        if (structuredPrompt.conversation_history && structuredPrompt.conversation_history.length > 0) {
-            structuredPrompt.conversation_history.forEach((interaction: any) => {
-                if (interaction.query) {
-                    messages.push({ role: 'user', content: interaction.query });
-                }
-                if (interaction.response) {
-                    messages.push({ role: 'assistant', content: interaction.response });
-                }
-            });
-        }
-
-        // Add current query
-        messages.push({ role: 'user', content: structuredPrompt.current_user_query });
-
-        // STAGE 1: Truncate context if needed
-        const { messages: truncatedMessages, truncated } = this.contextManager.truncateContext(
-            messages,
-            structuredPrompt.system_message
-        );
-
-        if (truncated) {
-            this.logger.warn('Context window truncated for LLM', {
-                originalMessages: messages.length,
-                truncatedMessages: truncatedMessages.length - 1 // -1 for system message
-            });
-        }
-
-        // Format truncated messages for LLM
-        let promptParts: string[] = [];
-
-        for (const msg of truncatedMessages) {
-            if (msg.role === 'system') {
-                promptParts.push(`System: ${msg.content}`);
-            } else if (msg.role === 'user') {
-                promptParts.push(`User: ${msg.content}`);
-            } else if (msg.role === 'assistant') {
-                promptParts.push(`Assistant: ${msg.content}`);
-            }
-        }
-
-        promptParts.push(`\n=== CURRENT INTERACTION ===`);
-        promptParts.push(`Assistant:`);
-
-        return promptParts.join('\n');
+    private async synthesizeFromPlan(plan: any, originalQuery: string, preferredModel?: string): Promise<string> {
+        return this.synthesisHelper.synthesizeFromPlan(plan, originalQuery, this.getModelPath(preferredModel));
     }
 }
 

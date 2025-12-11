@@ -8,6 +8,7 @@ import { toolQueue, toolQueueEvents } from '../../queues/tool.queue.js';
 import { CircuitBreaker } from '../../core/reliability/circuit-breaker.js';
 import { ParallelToolExecutor } from '../tool/parallel-executor.service.js'; // Stage 4: Parallel execution
 import { toolService } from '../tool/tool.service.js'; // Stage 4: For parallel executor
+import { executeWithRecovery } from '../../core/utils/error-recovery.utils.js';
 
 export class ToolExecutor {
     private logger: Logger;
@@ -114,26 +115,33 @@ export class ToolExecutor {
                 const circuitBreaker = this.getCircuitBreaker(toolName);
 
                 // Execute via circuit breaker and queue
+                // Execute via circuit breaker and recovery
                 const timeout = this.toolTimeouts.get(toolName) || this.DEFAULT_TIMEOUT_MS;
 
-                const result = await circuitBreaker.execute(async () => {
-                    // Add job to queue
-                    const job = await toolQueue.add('execute-tool', {
-                        toolName,
-                        params: toolParams,
-                        sessionId
-                    }, {
-                        removeOnComplete: true,
-                        removeOnFail: true
+                const result = await executeWithRecovery(async () => {
+                    return await circuitBreaker.execute(async () => {
+                        // Add job to queue
+                        const job = await toolQueue.add('execute-tool', {
+                            toolName,
+                            params: toolParams,
+                            sessionId
+                        }, {
+                            removeOnComplete: true,
+                            removeOnFail: true
+                        });
+
+                        this.logger.info(`Added tool execution job to queue`, { jobId: job.id, tool: toolName });
+
+                        // Wait for job completion with timeout
+                        return await Promise.race([
+                            job.waitUntilFinished(toolQueueEvents),
+                            this.createTimeout(timeout, toolName)
+                        ]);
                     });
-
-                    this.logger.info(`Added tool execution job to queue`, { jobId: job.id, tool: toolName });
-
-                    // Wait for job completion with timeout
-                    return await Promise.race([
-                        job.waitUntilFinished(toolQueueEvents),
-                        this.createTimeout(timeout, toolName)
-                    ]);
+                }, {
+                    context: `Tool Execution (${toolName})`,
+                    retries: 1, // Limited retries for tools
+                    onError: (err: any) => this.logger.warn(`Tool ${toolName} execution failed: ${err.message}`)
                 });
 
                 const duration = Date.now() - startTime;

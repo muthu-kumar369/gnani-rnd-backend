@@ -1,6 +1,7 @@
 // src/modules/session/session.coordinator.ts
 import { v4 as uuidv4 } from 'uuid';
 import { createContextualLogger } from '../../core/logger/logger.js';
+import { executeWithRecovery } from '../../core/utils/error-recovery.utils.js';
 import { AudioProcessor } from './audio.processor.js';
 import { TranscriptProcessor } from './transcript.processor.js';
 import { ContextBuilder } from './context.builder.js';
@@ -13,6 +14,8 @@ import { Logger } from 'winston';
 import Conversation from '../conversation/conversation.model.js';
 import ConversationMessage from '../memory/entities/conversation.entity.js';
 import sessionPersistence from './session.persistence.js';
+import sessionReplayService from './session-replay.service.js';
+
 import assistantStateMachine from '../../core/state-machine/assistant.machine.js';
 import { AssistantEvent, AssistantState } from '../../core/state-machine/assistant-states.js';
 import { validateMessage } from '../conversation/message-validator.js'; // STAGE 1
@@ -345,6 +348,9 @@ export class SessionCoordinator {
             transcript: transcript.substring(0, 100)
         });
 
+        // STAGE 3: Record User Event for Replay
+        sessionReplayService.recordEvent(sessionId, 'user_message', { text: transcript });
+
         const session = this.sessions.get(sessionId);
         if (!session) {
             this.logger.error(`[AUDIO-FLOW-ERROR] Session ${sessionId} not found in handleFinalTranscript`);
@@ -423,6 +429,12 @@ export class SessionCoordinator {
                         parentId: lastMessage ? lastMessage._id : 'root'
                     });
 
+                    // Update message count for user message
+                    await Conversation.findOneAndUpdate(
+                        { conversationId: convIdToSave },
+                        { $inc: { messageCount: 1 } }
+                    );
+
                 } catch (dbError: any) {
                     this.logger.error(`Failed to save user message: ${dbError.message}`);
                     try {
@@ -454,14 +466,22 @@ export class SessionCoordinator {
                 this.logger.warn(`State machine transition failed: ${error.message}`);
             }
 
+
+
             const contextStartTime = Date.now();
-            const context = await this.contextBuilder.build(
-                sessionId,
-                session.userId,
-                transcript,
-                undefined, // attachments
-                templateSystemPrompt // Use template's system prompt if available
-            );
+            const context = await executeWithRecovery(async () => {
+                return await this.contextBuilder.build(
+                    sessionId,
+                    session.userId,
+                    transcript,
+                    undefined, // attachments
+                    templateSystemPrompt // Use template's system prompt if available
+                );
+            }, {
+                context: `Context Building (${sessionId})`,
+                retries: 2,
+                onError: (err: any) => this.logger.warn(`Context building failed, retrying: ${err.message}`)
+            });
             const contextDuration = Date.now() - contextStartTime;
             this.logger.info(`[AUDIO-FLOW-14] Context built for session ${sessionId}`, {
                 duration: contextDuration,
@@ -610,6 +630,12 @@ export class SessionCoordinator {
                     }
 
                     finalMessageId = newMsg._id.toString();
+
+                    // Update message count for assistant message
+                    await Conversation.findOneAndUpdate(
+                        { conversationId: convIdToSave },
+                        { $inc: { messageCount: 1 } }
+                    );
                 }
             } catch (dbError: any) {
                 this.logger.error(`Failed to save assistant message: ${dbError.message}`);

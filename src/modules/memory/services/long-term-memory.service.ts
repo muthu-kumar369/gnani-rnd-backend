@@ -6,6 +6,7 @@ import vectorManager from '../../vector/vector.manager.js';
 import llmService from '../../llm/llm.service.js';
 import { Logger } from 'winston';
 import { v4 as uuidv4 } from 'uuid';
+import memoryScorer from './memory-scorer.service.js';
 
 class LongTermMemoryService {
     private logger: Logger;
@@ -103,6 +104,13 @@ class LongTermMemoryService {
 
             await conversationSummary.save();
             this.logger.info(`Created summary for ${messages.length} messages`);
+
+            // Prune memories to keep collection size manageable
+            // Run asynchronously to not block response
+            memoryScorer.pruneMemories(userId, 1000).catch(err => {
+                this.logger.warn(`Memory pruning failed in background: ${err.message}`);
+            });
+
             return conversationSummary;
         } catch (error: any) {
             this.logger.error(`Error creating summary: ${error.message}`);

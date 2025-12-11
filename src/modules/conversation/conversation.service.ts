@@ -7,6 +7,7 @@ import { Types } from 'mongoose';
 import sessionCoordinator from '../session/session.coordinator.js';
 import { redisClient } from '../../config/redis.config.js'; // STAGE 13
 import { validateMessage } from './message-validator.js'; // STAGE 1
+import vectorManager from '../vector/vector.manager.js'; // STAGE 3
 
 interface PaginationOptions {
     page?: number;
@@ -29,7 +30,7 @@ class ConversationService {
         const sortMapping: Record<string, string> = {
             'date': 'updatedAt',
             'name': 'title',
-            'messageCount': 'updatedAt' // Fallback for now until message count is aggregated
+            'messageCount': 'messageCount'
         };
 
         const sortBy = sortMapping[options.sortBy || 'date'] || 'updatedAt';
@@ -97,6 +98,7 @@ class ConversationService {
                     title: 1,
                     updatedAt: 1,
                     createdAt: 1,
+                    messageCount: 1,
                     currentModel: 1,
                     currentTemplate: 1,
                     preview: {
@@ -221,47 +223,134 @@ class ConversationService {
     }
 
     /**
-     * Search conversations
+     * Search conversations (Basic, Semantic, Hybrid)
      */
-    async searchConversations(userId: string, query: string, limit: number = 10) {
-        // 1. Search in Conversation titles
-        const titleMatches = await Conversation.find({
-            userId,
-            isDeleted: false,
-            $text: { $search: query }
-        }).limit(limit).lean();
+    async searchConversations(userId: string, query: string, limit: number = 10, mode: 'basic' | 'semantic' | 'hybrid' = 'basic', filters: any = {}) {
+        this.logger.info(`Searching conversations`, { userId, mode, query });
 
-        // 2. Search in Messages
-        const messageMatches = await ConversationMessage.find({
-            userId,
-            $text: { $search: query }
-        }).limit(limit * 2).select('conversationId content').lean();
+        // 1. Basic Search (Mongo Text)
+        const executeBasicSearch = async () => {
+            // Search in Conversation titles
+            const titleMatches = await Conversation.find({
+                userId,
+                isDeleted: false,
+                $text: { $search: query }
+            }).limit(limit).lean();
 
-        // Extract unique conversation IDs from message matches
-        const conversationIdsFromMessages = [...new Set(messageMatches.map(m => m.conversationId))];
+            // Search in Messages
+            const messageMatches = await ConversationMessage.find({
+                userId,
+                $text: { $search: query }
+            }).limit(limit * 2).select('conversationId content').lean();
 
-        // Fetch conversations for message matches (if not already found by title)
-        const titleMatchIds = new Set(titleMatches.map(c => c.conversationId));
-        const newConversationIds = conversationIdsFromMessages.filter(cid => !titleMatchIds.has(cid));
+            // Extract unique conversation IDs from message matches
+            const conversationIdsFromMessages = [...new Set(messageMatches.map(m => m.conversationId))];
 
-        const messageMatchConversations = await Conversation.find({
-            conversationId: { $in: newConversationIds },
-            userId,
-            isDeleted: false
-        }).limit(limit - titleMatches.length).lean();
+            // Fetch conversations for message matches (if not already found by title)
+            const titleMatchIds = new Set(titleMatches.map(c => c.conversationId));
+            const newConversationIds = conversationIdsFromMessages.filter(cid => !titleMatchIds.has(cid));
 
-        const allConversations = [...titleMatches, ...messageMatchConversations];
+            const messageMatchConversations = await Conversation.find({
+                conversationId: { $in: newConversationIds },
+                userId,
+                isDeleted: false
+            }).limit(limit - titleMatches.length).lean();
 
-        // Add snippets
-        return allConversations.map(conv => {
-            const matchingMsg = messageMatches.find(m => m.conversationId === conv.conversationId);
-            return {
-                ...conv,
-                id: conv._id,
-                matchType: titleMatchIds.has(conv.conversationId) ? 'title' : 'content',
-                snippet: matchingMsg ? matchingMsg.content.substring(0, 150) : ''
-            };
-        });
+            const allConversations = [...titleMatches, ...messageMatchConversations];
+
+            // Format results
+            return allConversations.map(conv => {
+                const matchingMsg = messageMatches.find(m => m.conversationId === conv.conversationId);
+                return {
+                    conversationId: conv.conversationId,
+                    title: conv.title,
+                    snippet: matchingMsg ? matchingMsg.content.substring(0, 150) + '...' : (conv.systemPrompt?.substring(0, 100) + '...' || ''),
+                    score: matchingMsg ? 1.0 : 0.8, // Rough heuristic
+                    createdAt: conv.createdAt,
+                    model: conv.currentModel,
+                    matchType: titleMatchIds.has(conv.conversationId) ? 'title' : 'content'
+                };
+            });
+        };
+
+        // 2. Semantic Search (Vector)
+        const executeSemanticSearch = async () => {
+            try {
+                const vectorResults = await vectorManager.search(query, limit, { userId, ...filters });
+                return vectorResults.map((r: any) => ({
+                    conversationId: r.metadata.conversationId,
+                    title: 'Conversation', // Vector results might not have title, needs lookup? Or redundant with metadata?
+                    snippet: r.document.substring(0, 150) + '...',
+                    score: 1 - r.distance, // Similarity
+                    createdAt: new Date().toISOString(), // Placeholder if unchecked
+                    // Ideally we should lookup conversation details, but for speed let's just return what we have
+                    // or do a quick lookup
+                }));
+            } catch (error) {
+                this.logger.error('Vector search failed', { error });
+                return [];
+            }
+        };
+
+        // Execution based on mode
+        let results: any[] = [];
+
+        if (mode === 'basic') {
+            results = await executeBasicSearch();
+        } else if (mode === 'semantic') {
+            const semanticResults = await executeSemanticSearch();
+            // Enrich semantic results with conversation details
+            const convIds = [...new Set(semanticResults.map(r => r.conversationId))];
+            const conversations = await Conversation.find({ conversationId: { $in: convIds }, userId }).lean();
+            const convMap = new Map(conversations.map(c => [c.conversationId, c]));
+
+            results = semanticResults.map(r => {
+                const conv = convMap.get(r.conversationId);
+                return conv ? { ...r, title: conv.title, createdAt: conv.createdAt, model: conv.currentModel } : null;
+            }).filter(Boolean);
+
+        } else if (mode === 'hybrid') {
+            const [basicResults, semanticResults] = await Promise.all([
+                executeBasicSearch(),
+                executeSemanticSearch()
+            ]);
+
+            // Simple merging strategy: RRF or Weighted
+            // Let's use a Map to merge by conversationId
+            const combinedMap = new Map<string, any>();
+
+            // Add Semantic (Weight 0.7)
+            for (const res of semanticResults) {
+                combinedMap.set(res.conversationId, { ...res, score: res.score * 0.7 });
+            }
+
+            // Add/Merge Basic (Weight 0.3)
+            for (const res of basicResults) {
+                if (combinedMap.has(res.conversationId)) {
+                    const existing = combinedMap.get(res.conversationId);
+                    existing.score += res.score * 0.3; // Boost existing
+                    existing.matchType = 'hybrid';
+                } else {
+                    combinedMap.set(res.conversationId, { ...res, score: res.score * 0.3 });
+                }
+            }
+
+            results = Array.from(combinedMap.values()).sort((a, b) => b.score - a.score).slice(0, limit);
+
+            // Ensure titles for semantic-only results
+            const missingTitleIds = results.filter(r => !r.title || r.title === 'Conversation').map(r => r.conversationId);
+            if (missingTitleIds.length > 0) {
+                const conversations = await Conversation.find({ conversationId: { $in: missingTitleIds }, userId }).lean();
+                const convMap = new Map(conversations.map(c => [c.conversationId, c]));
+                results = results.map(r => {
+                    const conv = convMap.get(r.conversationId);
+                    if (conv) return { ...r, title: conv.title, createdAt: conv.createdAt, model: conv.currentModel };
+                    return r;
+                });
+            }
+        }
+
+        return results;
     }
 
     /**
@@ -579,6 +668,13 @@ class ConversationService {
                 console.error(`Async regeneration failed for session ${ephemSessionId}:`, err);
             });
 
+
+        // Update message count
+        await Conversation.findOneAndUpdate(
+            { conversationId },
+            { $inc: { messageCount: 1 } } // Assistant response
+        );
+
         // Return the pending message immediately
         return newGeneration;
     }
@@ -738,6 +834,22 @@ class ConversationService {
 
             // Return pending response immediately
             // newResponse is already the pending document we created above/fetched
+
+            // Update message count - new response added, old ones deleted
+            // Net change = 1 (new response) - oldResponseIds.length
+            const netChange = 1 - oldResponseIds.length;
+            if (netChange !== 0) {
+                await Conversation.findOneAndUpdate(
+                    { conversationId },
+                    { $inc: { messageCount: netChange } }
+                );
+            }
+        } else if (oldResponseIds.length > 0) {
+            // Just deletions
+            await Conversation.findOneAndUpdate(
+                { conversationId },
+                { $inc: { messageCount: -oldResponseIds.length } }
+            );
         }
 
         // Build message ordering sequence
@@ -882,6 +994,12 @@ class ConversationService {
             undoToken
         });
 
+        // Update message count
+        await Conversation.findOneAndUpdate(
+            { conversationId },
+            { $inc: { messageCount: -allIds.length } }
+        );
+
         return {
             deletedCount: allIds.length,
             cascadedResponses: responseIds.length,
@@ -943,6 +1061,12 @@ class ConversationService {
             restoredCount: messageIds.length
         });
 
+        // Update message count
+        await Conversation.findOneAndUpdate(
+            { conversationId: message.conversationId },
+            { $inc: { messageCount: messageIds.length } }
+        );
+
         return { restoredCount: messageIds.length };
     }
 
@@ -956,6 +1080,14 @@ class ConversationService {
             deletedAt: null,
             deletedBy: null
         });
+
+
+
+        // Update message count
+        await Conversation.findOneAndUpdate(
+            { conversationId },
+            { $inc: { messageCount: 1 } }
+        );
 
         return restoredMessage;
     }
@@ -992,6 +1124,43 @@ class ConversationService {
         });
 
         return restoredMessage;
+    }
+    async shareConversation(conversationId: string, userId: string, expiresIn?: number) {
+        // Find conversation
+        const conversation = await Conversation.findOne({ conversationId, userId });
+        if (!conversation) {
+            throw new Error('Conversation not found');
+        }
+
+        // Generate or retrieve share ID
+        let shareId = conversation.shareId;
+        if (!shareId) {
+            // Generate a secure random string for sharing
+            shareId = Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
+        }
+
+        // Calculate expiration date
+        let shareExpiresAt: Date | undefined;
+        if (expiresIn) {
+            shareExpiresAt = new Date(Date.now() + expiresIn * 1000);
+        }
+
+        // Update conversation with share details
+        await Conversation.findOneAndUpdate(
+            { conversationId },
+            {
+                $set: {
+                    shareId,
+                    shareExpiresAt
+                }
+            }
+        );
+
+        return {
+            shareId,
+            shareUrl: `${process.env.APP_URL || 'http://localhost:5173'}/share/${shareId}`,
+            expiresAt: shareExpiresAt
+        };
     }
 }
 

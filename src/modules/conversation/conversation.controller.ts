@@ -84,11 +84,11 @@ class ConversationController {
             const userId = req.user?.id;
             if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
-            const { query, limit } = req.body;
+            const { query, limit, mode, filters } = req.body;
             if (!query) return res.status(400).json({ error: 'Query is required' });
 
-            const results = await conversationService.searchConversations(userId, query, limit);
-            res.json({ conversations: results });
+            const results = await conversationService.searchConversations(userId, query, limit, mode, filters);
+            res.json({ results: results }); // Return as { results: [...] } to match store expectation
         } catch (error) {
             console.error('Error searching conversations:', error);
             res.status(500).json({ error: 'Internal Server Error' });
@@ -416,6 +416,25 @@ class ConversationController {
             res.json(result);
         } catch (error) {
             console.error('Error updating model:', error);
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
+    }
+
+    async shareConversation(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { id } = req.params;
+            const { expiresIn } = req.body;
+
+            const result = await conversationService.shareConversation(id, userId, expiresIn);
+            res.json(result);
+        } catch (error: any) {
+            console.error('Error sharing conversation:', error);
+            if (error.message === 'Conversation not found') {
+                return res.status(404).json({ error: 'Conversation not found' });
+            }
             res.status(500).json({ error: 'Internal Server Error' });
         }
     }
