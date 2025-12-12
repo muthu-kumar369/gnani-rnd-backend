@@ -291,11 +291,51 @@ class ConversationController {
 
             if (!content) return res.status(400).json({ error: 'Content is required' });
 
-            const result = await conversationService.sendMessage(id, userId, content);
-            res.json(result);
+            // Set up streaming headers
+            res.setHeader('Content-Type', 'application/x-ndjson');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            res.flushHeaders();
+
+            try {
+                await conversationService.sendMessage(id, userId, content, {
+                    onChunk: (text, messageId) => {
+                        const chunk = {
+                            type: 'message_chunk',
+                            content: text,
+                            messageId
+                        };
+                        res.write(JSON.stringify(chunk) + '\n');
+                    },
+                    onComplete: (text, messageId) => {
+                        const complete = {
+                            type: 'complete_response',
+                            content: text,
+                            conversationId: id,
+                            messageId
+                        };
+                        res.write(JSON.stringify(complete) + '\n');
+                    }
+                });
+
+                res.end();
+            } catch (serviceError: any) {
+                console.error('Error in sendMessage service:', serviceError);
+                // Send error event
+                const errorEvent = {
+                    type: 'error',
+                    error: serviceError.message || 'Internal Server Error'
+                };
+                res.write(JSON.stringify(errorEvent) + '\n');
+                res.end();
+            }
         } catch (error: any) {
             console.error('Error sending message:', error);
-            res.status(500).json({ error: error.message || 'Internal Server Error' });
+            if (!res.headersSent) {
+                res.status(500).json({ error: error.message || 'Internal Server Error' });
+            } else {
+                res.end();
+            }
         }
     }
 
@@ -435,6 +475,26 @@ class ConversationController {
             if (error.message === 'Conversation not found') {
                 return res.status(404).json({ error: 'Conversation not found' });
             }
+            res.status(500).json({ error: 'Internal Server Error' });
+        }
+    }
+
+    async togglePin(req: AuthenticatedRequest, res: Response) {
+        try {
+            const userId = req.user?.id;
+            if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+            const { id } = req.params;
+
+            const result = await conversationService.togglePin(id, userId);
+
+            if (!result) {
+                return res.status(404).json({ error: 'Conversation not found' });
+            }
+
+            res.json(result);
+        } catch (error: any) {
+            console.error('Error toggling pin:', error);
             res.status(500).json({ error: 'Internal Server Error' });
         }
     }

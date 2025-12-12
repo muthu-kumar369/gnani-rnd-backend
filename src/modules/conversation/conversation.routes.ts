@@ -39,6 +39,9 @@ router.patch('/:id/title', validate(updateConversationTitleSchema), conversation
 // Generate title automatically
 router.post('/:id/title/generate', conversationController.generateTitle);
 
+// Toggle conversation pin
+router.patch('/:id/pin', conversationController.togglePin);
+
 // Regenerate response
 router.post('/:id/regenerate', conversationController.regenerateResponse);
 

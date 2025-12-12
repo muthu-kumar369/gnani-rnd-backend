@@ -23,7 +23,7 @@ router.post('/', authMiddleware, async (req: CustomRequest, res: Response) => {
         }
 
         // Verify conversation belongs to user
-        const conversation = await Conversation.findOne({ _id: conversationId, userId });
+        const conversation = await Conversation.findOne({ conversationId, userId });
         if (!conversation) {
             return res.status(404).json({ error: 'Conversation not found' });
         }
@@ -80,7 +80,7 @@ router.get('/:shareId', async (req: Request, res: Response) => {
         }
 
         // Get conversation
-        const conversation = await Conversation.findById(share.conversationId).lean() as any;
+        const conversation = await Conversation.findOne({ conversationId: share.conversationId }).lean() as any;
         if (!conversation) {
             return res.status(404).json({ error: 'Conversation not found' });
         }

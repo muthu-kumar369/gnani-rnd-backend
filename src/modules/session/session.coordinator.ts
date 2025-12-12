@@ -393,7 +393,7 @@ export class SessionCoordinator {
                     const genIdToSave = uuidv4();
 
                     // Find previous message to link
-                    const lastMessage = await ConversationMessage.findOne({ conversationId: convIdToSave })
+                    const lastMessage = await ConversationMessage.findOne({ conversationId: convIdToSave, deletedAt: null })
                         .sort({ timestamp: -1 });
 
                     const targetParentId = lastMessage ? lastMessage._id.toString() : null;

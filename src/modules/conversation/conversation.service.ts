@@ -1,5 +1,6 @@
 import Conversation, { IConversation } from './conversation.model.js';
 import ConversationMessage from '../memory/entities/conversation.entity.js';
+import { Feedback } from '../../models/feedback.model.js'; // STAGE 14
 import llmService from '../llm/llm.service.js';
 import shortTermMemory from '../memory/services/short-term-memory.service.js';
 import { createContextualLogger } from '../../core/logger/logger.js';
@@ -37,7 +38,8 @@ class ConversationService {
         const sortOrder = options.sortOrder === 'asc' ? 1 : -1;
 
         // STAGE 13 Step 1: Check Redis cache first
-        const cacheKey = `conversations:${userId}:page${page}:limit${limit}`;
+        // v2: Bump version to force invalidate cache after adding isPinned field
+        const cacheKey = `v2:conversations:${userId}:page${page}:limit${limit}`;
         try {
             const cached = await redisClient.get(cacheKey);
             if (cached) {
@@ -68,8 +70,8 @@ class ConversationService {
             // Match user's active conversations
             { $match: { userId, isDeleted: false } },
 
-            // Sort by updatedAt (or pinned if field exists)
-            { $sort: { [sortBy]: sortOrder } },
+            // Sort by pinned first, then by the requested sort field
+            { $sort: { isPinned: -1, [sortBy]: sortOrder } },
 
             // Pagination
             { $skip: skip },
@@ -78,7 +80,7 @@ class ConversationService {
             // Lookup last message from ConversationMessage collection
             {
                 $lookup: {
-                    from: 'conversationmessages',
+                    from: 'conversation_messages',
                     let: { convId: '$conversationId' },
                     pipeline: [
                         { $match: { $expr: { $eq: ['$conversationId', '$$convId'] } } },
@@ -99,6 +101,7 @@ class ConversationService {
                     updatedAt: 1,
                     createdAt: 1,
                     messageCount: 1,
+                    isPinned: 1,
                     currentModel: 1,
                     currentTemplate: 1,
                     preview: {
@@ -133,10 +136,10 @@ class ConversationService {
             hasMore: total > skip + limit
         };
 
-        // STAGE 13: Cache the result (5 min TTL)
+        // STAGE 13: Cache the result (5 sec TTL for better responsiveness)
         try {
-            await redisClient.setex(cacheKey, 300, JSON.stringify(result));
-            this.logger.debug('Cached conversations list', { userId, page, ttl: 300 });
+            await redisClient.setex(cacheKey, 5, JSON.stringify(result));
+            this.logger.debug('Cached conversations list', { userId, page, ttl: 5 });
         } catch (error) {
             this.logger.warn('Failed to cache conversations list', { error });
         }
@@ -160,13 +163,22 @@ class ConversationService {
         const totalMessages = await ConversationMessage.countDocuments({ conversationId });
 
         // Fetch only latest 50 messages initially for performance
-        const messages = await ConversationMessage.find({ conversationId })
+        const messages = await ConversationMessage.find({ conversationId, deletedAt: null })
             .sort({ timestamp: -1 })
             .limit(50)
             .lean();
 
         // Restore chronological order for the tree builder
         messages.reverse();
+
+        // STAGE 14: Fetch feedback
+        const messageIds = messages.map(m => m._id.toString());
+        const feedbackList = await Feedback.find({
+            messageId: { $in: messageIds },
+            userId
+        }).lean();
+
+        const feedbackMap = new Map(feedbackList.map(f => [f.messageId, f]));
 
         return {
             ...conversation,
@@ -180,7 +192,12 @@ class ConversationService {
                 parentId: msg.parentId,
                 children: msg.children,
                 branchIndex: msg.branchIndex,
-                metadata: msg.metadata
+                metadata: msg.metadata,
+                feedback: feedbackMap.get(msg._id.toString()) ? {
+                    rating: feedbackMap.get(msg._id.toString())!.rating,
+                    comment: feedbackMap.get(msg._id.toString())!.comment,
+                    category: feedbackMap.get(msg._id.toString())!.category
+                } : undefined
             }))
         };
     }
@@ -206,6 +223,15 @@ class ConversationService {
         // Logic: Return as is, let frontend handle merging.
         // Actually, frontend expects linear chunks. 
 
+        // STAGE 14: Fetch feedback
+        const messageIds = messages.map(m => m._id.toString());
+        const feedbackList = await Feedback.find({
+            messageId: { $in: messageIds },
+            userId
+        }).lean();
+
+        const feedbackMap = new Map(feedbackList.map(f => [f.messageId, f]));
+
         return {
             messages: messages.map(msg => ({
                 id: msg._id,
@@ -216,7 +242,12 @@ class ConversationService {
                 parentId: msg.parentId,
                 children: msg.children,
                 branchIndex: msg.branchIndex,
-                metadata: msg.metadata
+                metadata: msg.metadata,
+                feedback: feedbackMap.get(msg._id.toString()) ? {
+                    rating: feedbackMap.get(msg._id.toString())!.rating,
+                    comment: feedbackMap.get(msg._id.toString())!.comment,
+                    category: feedbackMap.get(msg._id.toString())!.category
+                } : undefined
             })),
             hasMore: messages.length === limit
         };
@@ -398,7 +429,7 @@ class ConversationService {
             // STAGE 13 Step 3: Invalidate cache after deletion
             try {
                 // Invalidate all pages of conversation list for this user
-                const keys = await redisClient.keys(`conversations:${userId}:*`);
+                const keys = await redisClient.keys(`v2:conversations:${userId}:*`);
                 if (keys.length > 0) {
                     await redisClient.del(...keys);
                     this.logger.debug('Invalidated conversation list cache after deletion', { userId, conversationId });
@@ -418,11 +449,21 @@ class ConversationService {
      * Update conversation title
      */
     async updateTitle(conversationId: string, userId: string, title: string) {
-        return Conversation.findOneAndUpdate(
+        const result = await Conversation.findOneAndUpdate(
             { conversationId, userId },
-            { title },
+            { title, updatedAt: new Date() }, // Update timestamp to reflect change
             { new: true }
         );
+
+        // Invalidate cache
+        try {
+            const keys = await redisClient.keys(`v2:conversations:${userId}:*`);
+            if (keys.length > 0) await redisClient.del(...keys);
+        } catch (error) {
+            this.logger.warn('Failed to invalidate cache after title update', { error });
+        }
+
+        return result;
     }
 
     /**
@@ -456,6 +497,35 @@ class ConversationService {
             { currentModel: modelId },
             { new: true }
         );
+    }
+
+    /**
+     * Toggle conversation pin status
+     */
+    async togglePin(conversationId: string, userId: string) {
+        const conversation = await Conversation.findOne({ conversationId, userId });
+        if (!conversation) {
+            throw new Error('Conversation not found');
+        }
+
+        const newPinnedState = !conversation.isPinned;
+
+        const result = await Conversation.findOneAndUpdate(
+            { conversationId, userId },
+            { isPinned: newPinnedState },
+            { new: true }
+        );
+
+        // Invalidate cache
+        try {
+            // Pattern delete not supported by basic redis driver usually, need keys first
+            const keys = await redisClient.keys(`conversations:${userId}:*`);
+            if (keys.length > 0) await redisClient.del(...keys);
+        } catch (error) {
+            // ignore cache error
+        }
+
+        return result;
     }
 
     /**
@@ -637,14 +707,14 @@ class ConversationService {
             parentId: parentMessage._id.toString(),
             conversationId,
             role: 'assistant',
-            content: ' '
+            content: '...'
         });
 
         const newGeneration = await ConversationMessage.create({
             userId,
             conversationId,
             role: 'assistant',
-            content: ' ', // Initialize with a space to bypass "required" validation
+            content: '...', // Initialize with non-empty string to bypass validation
             status: 'pending',
             generationIndex: nextGenerationIndex,
             generationId,
@@ -682,14 +752,25 @@ class ConversationService {
     /**
      * Helper to ensure session exists in coordinator
      */
-    private async _ensureCoordinatorSession(conversationId: string, userId: string): Promise<string> {
+    private async _ensureCoordinatorSession(
+        conversationId: string,
+        userId: string,
+        callbacks?: {
+            onChunk?: (text: string, messageId?: string) => void | Promise<void>;
+            onComplete?: (text: string, messageId?: string) => void | Promise<void>;
+        }
+    ): Promise<string> {
         // Start a new ephemeral session bound to this conversation
         // This ensures the coordinator can process the request
         const { sessionId } = await sessionCoordinator.startSession(
             userId,
             async (transcript, isFinal) => { /* no-op for REST */ },
-            async (text) => { /* no-op for REST */ },
-            async (text) => { /* no-op for REST */ },
+            async (text, messageId) => {
+                if (callbacks?.onChunk) await callbacks.onChunk(text, messageId);
+            },
+            async (text, messageId) => {
+                if (callbacks?.onComplete) await callbacks.onComplete(text, messageId);
+            },
             async (status) => { /* no-op for REST */ },
             undefined, // Generate new ephemeral ID
             conversationId // Bind to persistent conversation ID
@@ -702,8 +783,16 @@ class ConversationService {
     /**
      * Send a new message (REST API)
      */
-    async sendMessage(conversationId: string, userId: string, content: string) {
-        const ephemSessionId = await this._ensureCoordinatorSession(conversationId, userId);
+    async sendMessage(
+        conversationId: string,
+        userId: string,
+        content: string,
+        callbacks?: {
+            onChunk?: (text: string, messageId?: string) => void | Promise<void>;
+            onComplete?: (text: string, messageId?: string) => void | Promise<void>;
+        }
+    ) {
+        const ephemSessionId = await this._ensureCoordinatorSession(conversationId, userId, callbacks);
 
         // Process via coordinator
         // Note: this awaits the full generation including LLM response

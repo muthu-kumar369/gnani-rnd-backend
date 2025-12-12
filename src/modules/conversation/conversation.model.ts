@@ -10,6 +10,7 @@ export interface IConversation extends Document {
     folderId?: string;         // Folder ID (STAGE R6)
     tags?: string[];           // Tags (STAGE R6)
     isDeleted: boolean;
+    isPinned?: boolean; // STAGE 2: Persistent pinning
     messageCount: number;
     shareId?: string;
     shareExpiresAt?: Date;
@@ -59,6 +60,11 @@ const conversationSchema = new Schema({
         index: true
     },
     isDeleted: {
+        type: Boolean,
+        default: false,
+        index: true
+    },
+    isPinned: {
         type: Boolean,
         default: false,
         index: true
