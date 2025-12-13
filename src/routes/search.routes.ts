@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import Conversation from '../modules/conversation/conversation.model.js';
+
 import { authMiddleware, type CustomRequest } from '../core/security/auth.middleware.js';
 import { createContextualLogger } from '../core/logger/logger.js';
 
@@ -12,6 +12,15 @@ router.post('/', authMiddleware, async (req: CustomRequest, res: Response) => {
         const userId = req.user?.id;
         const { query, filters = {} } = req.body;
 
+        // EMERGENCY DEBUG LOG
+        try {
+            const fs = await import('fs');
+            const path = await import('path');
+            const logPath = path.join(process.cwd(), 'debug_search.log');
+            const logEntry = `[${new Date().toISOString()}] User: ${userId}, Query: ${query}, Filters: ${JSON.stringify(filters)}, Mode: ${req.body.mode}, Limit: ${req.body.limit}\n`;
+            fs.appendFileSync(logPath, logEntry);
+        } catch (e) { /* ignore */ }
+
         if (!userId) {
             return res.status(401).json({ error: 'Unauthorized' });
         }
@@ -20,62 +29,22 @@ router.post('/', authMiddleware, async (req: CustomRequest, res: Response) => {
             return res.status(400).json({ error: 'Search query is required' });
         }
 
-        // Build search query
-        const searchQuery: any = {
-            userId,
-            isDeleted: false,
-            $text: { $search: query.trim() },
-        };
 
-        // Apply filters
-        if (filters.dateFrom) {
-            searchQuery.createdAt = { $gte: new Date(filters.dateFrom) };
+        // Extract optional params
+        const limit = req.body.limit ? parseInt(req.body.limit) : 20;
+        const mode = req.body.mode || 'basic';
+
+        // Delegate to unified search service
+        const conversationService = (await import('../modules/conversation/conversation.service.js')).default;
+        const serviceResponse: any = await conversationService.searchConversations(userId, query, limit, mode, filters);
+
+        // Debug mode pass-through
+        if (serviceResponse.debug) {
+            res.json(serviceResponse); // Returns { debug, results }
+            return;
         }
 
-        if (filters.dateTo) {
-            searchQuery.createdAt = {
-                ...searchQuery.createdAt,
-                $lte: new Date(filters.dateTo),
-            };
-        }
-
-        if (filters.models && filters.models.length > 0) {
-            searchQuery.currentModel = { $in: filters.models };
-        } else if (filters.model) {
-            // Backward compatibility
-            searchQuery.currentModel = filters.model;
-        }
-
-        if (filters.folders && filters.folders.length > 0) {
-            searchQuery.folderId = { $in: filters.folders };
-        }
-
-        if (filters.tags && filters.tags.length > 0) {
-            searchQuery.tags = { $in: filters.tags };
-        }
-
-        // Search conversations
-        const conversations = await Conversation.find(searchQuery, {
-            score: { $meta: 'textScore' },
-        })
-            .sort({ score: { $meta: 'textScore' }, updatedAt: -1 })
-            .limit(20)
-            .lean();
-
-        // Format results
-        const results = conversations.map((conv: any) => {
-            // Get snippet from system prompt or title
-            const snippet = conv.systemPrompt?.substring(0, 150) + '...' || conv.title?.substring(0, 150) + '...' || 'No preview available';
-
-            return {
-                conversationId: conv._id,
-                title: conv.title || 'Untitled Conversation',
-                snippet,
-                score: conv.score || 0,
-                createdAt: conv.createdAt,
-                model: conv.currentModel,
-            };
-        });
+        const results = serviceResponse; // Fallback if regular array (once we revert)
 
         logger.info(`Search completed: "${query}" - ${results.length} results`);
 

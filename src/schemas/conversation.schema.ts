@@ -38,5 +38,8 @@ export const editMessageSchema = z.object({
 export const searchConversationSchema = z.object({
     body: z.object({
         query: z.string(),
+        limit: z.number().optional(),
+        mode: z.enum(['basic', 'semantic', 'hybrid']).optional(),
+        filters: z.any().optional(),
     }),
 });

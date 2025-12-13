@@ -256,132 +256,184 @@ class ConversationService {
     /**
      * Search conversations (Basic, Semantic, Hybrid)
      */
-    async searchConversations(userId: string, query: string, limit: number = 10, mode: 'basic' | 'semantic' | 'hybrid' = 'basic', filters: any = {}) {
-        this.logger.info(`Searching conversations`, { userId, mode, query });
+    async searchConversations(userId: string, query: string, limit: number = 20, mode: 'basic' | 'semantic' | 'hybrid' = 'basic', filters: any = {}) {
+        this.logger.info(`Searching conversations (Aggregation)`, { userId, query, filters });
 
-        // 1. Basic Search (Mongo Text)
-        const executeBasicSearch = async () => {
-            // Search in Conversation titles
-            const titleMatches = await Conversation.find({
-                userId,
-                isDeleted: false,
-                $text: { $search: query }
-            }).limit(limit).lean();
+        const trimmedQuery = query.trim();
+        if (!trimmedQuery) return [];
 
-            // Search in Messages
-            const messageMatches = await ConversationMessage.find({
-                userId,
-                $text: { $search: query }
-            }).limit(limit * 2).select('conversationId content').lean();
+        const escapeRegExp = (string: string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const pattern = escapeRegExp(trimmedQuery);
+        // MongoDB regex query
+        const regexMatch = { $regex: pattern, $options: 'i' };
 
-            // Extract unique conversation IDs from message matches
-            const conversationIdsFromMessages = [...new Set(messageMatches.map(m => m.conversationId))];
-
-            // Fetch conversations for message matches (if not already found by title)
-            const titleMatchIds = new Set(titleMatches.map(c => c.conversationId));
-            const newConversationIds = conversationIdsFromMessages.filter(cid => !titleMatchIds.has(cid));
-
-            const messageMatchConversations = await Conversation.find({
-                conversationId: { $in: newConversationIds },
-                userId,
-                isDeleted: false
-            }).limit(limit - titleMatches.length).lean();
-
-            const allConversations = [...titleMatches, ...messageMatchConversations];
-
-            // Format results
-            return allConversations.map(conv => {
-                const matchingMsg = messageMatches.find(m => m.conversationId === conv.conversationId);
-                return {
-                    conversationId: conv.conversationId,
-                    title: conv.title,
-                    snippet: matchingMsg ? matchingMsg.content.substring(0, 150) + '...' : (conv.systemPrompt?.substring(0, 100) + '...' || ''),
-                    score: matchingMsg ? 1.0 : 0.8, // Rough heuristic
-                    createdAt: conv.createdAt,
-                    model: conv.currentModel,
-                    matchType: titleMatchIds.has(conv.conversationId) ? 'title' : 'content'
-                };
-            });
+        // Build Filter Query
+        const matchQuery: any = {
+            userId,
+            isDeleted: false
         };
 
-        // 2. Semantic Search (Vector)
-        const executeSemanticSearch = async () => {
-            try {
-                const vectorResults = await vectorManager.search(query, limit, { userId, ...filters });
-                return vectorResults.map((r: any) => ({
-                    conversationId: r.metadata.conversationId,
-                    title: 'Conversation', // Vector results might not have title, needs lookup? Or redundant with metadata?
-                    snippet: r.document.substring(0, 150) + '...',
-                    score: 1 - r.distance, // Similarity
-                    createdAt: new Date().toISOString(), // Placeholder if unchecked
-                    // Ideally we should lookup conversation details, but for speed let's just return what we have
-                    // or do a quick lookup
-                }));
-            } catch (error) {
-                this.logger.error('Vector search failed', { error });
-                return [];
-            }
-        };
-
-        // Execution based on mode
-        let results: any[] = [];
-
-        if (mode === 'basic') {
-            results = await executeBasicSearch();
-        } else if (mode === 'semantic') {
-            const semanticResults = await executeSemanticSearch();
-            // Enrich semantic results with conversation details
-            const convIds = [...new Set(semanticResults.map(r => r.conversationId))];
-            const conversations = await Conversation.find({ conversationId: { $in: convIds }, userId }).lean();
-            const convMap = new Map(conversations.map(c => [c.conversationId, c]));
-
-            results = semanticResults.map(r => {
-                const conv = convMap.get(r.conversationId);
-                return conv ? { ...r, title: conv.title, createdAt: conv.createdAt, model: conv.currentModel } : null;
-            }).filter(Boolean);
-
-        } else if (mode === 'hybrid') {
-            const [basicResults, semanticResults] = await Promise.all([
-                executeBasicSearch(),
-                executeSemanticSearch()
-            ]);
-
-            // Simple merging strategy: RRF or Weighted
-            // Let's use a Map to merge by conversationId
-            const combinedMap = new Map<string, any>();
-
-            // Add Semantic (Weight 0.7)
-            for (const res of semanticResults) {
-                combinedMap.set(res.conversationId, { ...res, score: res.score * 0.7 });
+        if (filters) {
+            if (filters.dateFrom || filters.dateTo) {
+                matchQuery.createdAt = {};
+                if (filters.dateFrom) matchQuery.createdAt.$gte = new Date(filters.dateFrom);
+                if (filters.dateTo) matchQuery.createdAt.$lte = new Date(filters.dateTo);
             }
 
-            // Add/Merge Basic (Weight 0.3)
-            for (const res of basicResults) {
-                if (combinedMap.has(res.conversationId)) {
-                    const existing = combinedMap.get(res.conversationId);
-                    existing.score += res.score * 0.3; // Boost existing
-                    existing.matchType = 'hybrid';
-                } else {
-                    combinedMap.set(res.conversationId, { ...res, score: res.score * 0.3 });
-                }
+            if (filters.models && filters.models.length > 0) {
+                matchQuery.currentModel = { $in: filters.models };
+            } else if (filters.model) {
+                matchQuery.currentModel = filters.model;
             }
 
-            results = Array.from(combinedMap.values()).sort((a, b) => b.score - a.score).slice(0, limit);
+            if (filters.folders && filters.folders.length > 0) {
+                matchQuery.folderId = { $in: filters.folders };
+            }
 
-            // Ensure titles for semantic-only results
-            const missingTitleIds = results.filter(r => !r.title || r.title === 'Conversation').map(r => r.conversationId);
-            if (missingTitleIds.length > 0) {
-                const conversations = await Conversation.find({ conversationId: { $in: missingTitleIds }, userId }).lean();
-                const convMap = new Map(conversations.map(c => [c.conversationId, c]));
-                results = results.map(r => {
-                    const conv = convMap.get(r.conversationId);
-                    if (conv) return { ...r, title: conv.title, createdAt: conv.createdAt, model: conv.currentModel };
-                    return r;
-                });
+            if (filters.tags && filters.tags.length > 0) {
+                matchQuery.tags = { $in: filters.tags };
             }
         }
 
-        return results;
+        // Helper to prefix keys for lookup match (e.g. 'isDeleted' -> 'conversation.isDeleted')
+        const getLookupMatch = (baseQuery: any) => {
+            const lookupQuery: any = {};
+            for (const key of Object.keys(baseQuery)) {
+                lookupQuery[`conversation.${key}`] = baseQuery[key];
+            }
+            return lookupQuery;
+        };
+
+        // Aggregation Pipeline
+        const aggregationPipeline: any[] = [
+            // 1. Match Conversations by Title AND Filters
+            {
+                $match: {
+                    ...matchQuery,
+                    title: regexMatch
+                }
+            },
+            // Add metadata for Title matches
+            {
+                $addFields: {
+                    matchType: 'title',
+                    score: 1.0,
+                    snippetContent: '$systemPrompt' // Fallback for title matches
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    conversationId: 1,
+                    title: 1,
+                    createdAt: 1,
+                    currentModel: 1,
+                    matchType: 1,
+                    score: 1,
+                    snippetContent: 1
+                }
+            },
+            // 2. Union with Message Matches
+            {
+                $unionWith: {
+                    coll: 'conversation_messages',
+                    pipeline: [
+                        {
+                            $match: {
+                                userId, // Always enforce userId on message level too for safety/speed
+                                deletedAt: null,
+                                content: regexMatch
+                            }
+                        },
+                        // Optimization: Limit message scan 
+                        { $limit: limit * 5 },
+
+                        // Lookup parent conversation 
+                        {
+                            $lookup: {
+                                from: 'conversations',
+                                localField: 'conversationId',
+                                foreignField: 'conversationId',
+                                as: 'conversation'
+                            }
+                        },
+                        { $unwind: '$conversation' },
+
+                        // Apply Filters to the PARENT conversation
+                        {
+                            $match: getLookupMatch(matchQuery)
+                        },
+
+                        // Project to common shape
+                        {
+                            $project: {
+                                _id: '$conversation._id',
+                                conversationId: '$conversationId',
+                                title: '$conversation.title',
+                                createdAt: '$conversation.createdAt',
+                                currentModel: '$conversation.currentModel',
+                                matchType: 'content',
+                                score: 0.8,
+                                snippetContent: '$content'
+                            }
+                        }
+                    ]
+                }
+            },
+            // 3. Group by ConversationId to remove duplicates
+            // We want to prioritize the entry with the highest score (Title match = 1.0, Content = 0.8)
+            // OR prioritize content match if we want to show the message snippet?
+            // Let's sort by score descending first
+            { $sort: { score: -1, createdAt: -1 } },
+            {
+                $group: {
+                    _id: '$conversationId',
+                    doc: { $first: '$$ROOT' }, // Keep the highest scoring match
+                    // If we have multiple matches, we might want to know.
+                    matches: { $push: '$matchType' }
+                }
+            },
+            { $replaceRoot: { newRoot: '$doc' } },
+
+            // 4. Final Sort and Limit
+            { $sort: { createdAt: -1 } }, // User usually wants recent relevant results
+            { $limit: limit }
+        ];
+
+
+
+
+
+        const results = await Conversation.aggregate(aggregationPipeline);
+
+        // Post-processing for smart snippets (easier in simple JS/Node than Mongo regex operators)
+        const generateSnippet = (content: string, queryRegex: RegExp): string => {
+            if (!content) return '';
+            const matchIndex = content.search(queryRegex);
+            if (matchIndex === -1) return content.substring(0, 150) + '...';
+
+            const windowSize = 75;
+            const start = Math.max(0, matchIndex - windowSize);
+            const end = Math.min(content.length, matchIndex + windowSize);
+
+            let snippet = content.substring(start, end);
+            if (start > 0) snippet = '...' + snippet;
+            if (end < content.length) snippet = snippet + '...';
+
+            return snippet;
+        };
+
+        const finalResults = results.map(r => ({
+            conversationId: r.conversationId,
+            title: r.title,
+            snippet: generateSnippet(r.snippetContent, new RegExp(pattern, 'i')),
+            createdAt: r.createdAt,
+            model: r.currentModel,
+            score: r.score,
+            matchType: r.matchType
+        }));
+
+        return finalResults;
     }
 
     /**
