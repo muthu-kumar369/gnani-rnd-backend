@@ -10,14 +10,14 @@ const oauthService = new OAuthService();
 
 export default {
     async register(req: Request, res: Response, next: NextFunction): Promise<void> {
-        const { username, email, password } = req.body;
+        const { firstName, lastName, email, password } = req.body;
         try {
-            const user = await authService.registerUser({ username, email, password });
-            auditService.logAuthEvent(user.userId, 'REGISTER', 'success', { username, email });
+            const user = await authService.registerUser({ firstName, lastName, email, password });
+            auditService.logAuthEvent(user.userId, 'REGISTER', 'success', { username: user.username, email });
             res.status(201).json({ message: 'User registered successfully', userId: user.userId });
         } catch (error: any) {
-            logger.error(`Registration error for ${username || email}: ${error.message}`);
-            auditService.logAuthEvent(null, 'REGISTER', 'failure', { username, email, error: error.message });
+            logger.error(`Registration error for ${email}: ${error.message}`);
+            auditService.logAuthEvent(null, 'REGISTER', 'failure', { email, error: error.message });
             next(error);
         }
     },

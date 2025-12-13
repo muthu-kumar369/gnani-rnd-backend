@@ -8,6 +8,7 @@ import auditService from '../../core/logger/audit.service.js';
 import config from '../../config/app.config.js'; // STAGE 1
 import { encryptToken, decryptToken } from '../../core/security/oauth-security.util.js';
 import { Logger } from 'winston';
+import { AuthenticationError } from '../../shared/errors/error-types.js'; // Added import
 
 export class AuthService {
     private logger: Logger;
@@ -130,29 +131,54 @@ export class AuthService {
     }
 
     async registerUser(userData: any): Promise<IUser> {
-        const { username, email, password } = userData;
+        const { firstName, lastName, email, password } = userData;
 
-        let user = await User.findOne({ $or: [{ username }, { email }] });
-        if (user) {
-            this.logger.warn(`Registration attempt for existing user: ${username || email} `);
-            auditService.logAuthEvent(null, 'REGISTER', 'failure', { username, email, reason: 'User already exists' });
-            throw new Error('User with that username or email already exists.');
+        // Check if user already exists
+        const userExists = await User.findOne({ email: email.toLowerCase() });
+        if (userExists) {
+            this.logger.warn(`Registration attempt for existing email: ${email}`);
+            auditService.logAuthEvent(null, 'REGISTER', 'failure', { email, reason: 'User with this email already exists' });
+            throw new Error('User with that email already exists.');
+        }
+
+        // Auto-generate username (handle)
+        // Strategy: Use first part of email + random suffix to ensure uniqueness
+        const baseName = email.split('@')[0].replace(/[^a-zA-Z0-9]/g, ''); // Sanitize
+        let username = `${baseName}${Math.floor(1000 + Math.random() * 9000)}`; // Initial try
+
+        // Simple collision check loop (max 3 retries)
+        let retries = 0;
+        while (await User.findOne({ username }) && retries < 3) {
+            username = `${baseName}${Math.floor(10000 + Math.random() * 90000)}`; // Try longer suffix
+            retries++;
+        }
+
+        // Final fallback if extremely unlucky (using uuid segment)
+        if (await User.findOne({ username })) {
+            username = `${baseName}${uuidv4().split('-')[0]}`;
         }
 
         const salt = await bcrypt.genSalt(10);
         const passwordHash = await bcrypt.hash(password, salt);
 
-        user = new User({
+        const newUser = new User({
             userId: uuidv4(),
-            username,
+            username, // Auto-generated
             email,
             passwordHash,
+            profile: {
+                firstName,
+                lastName,
+                // Initials can be derived dynamically, no need to store unless cached
+                locale: 'en-US', // Default
+                language: 'en'
+            }
         });
 
-        await user.save();
-        this.logger.info(`User registered successfully: ${user.username} `);
-        auditService.logAuthEvent(user.userId, 'REGISTER', 'success', { username, email });
-        return user;
+        await newUser.save();
+        this.logger.info(`User registered successfully: ${newUser.username} (${email})`);
+        auditService.logAuthEvent(newUser.userId, 'REGISTER', 'success', { username: newUser.username, email });
+        return newUser;
     }
 
     async loginUser(loginIdentifier: string, password: string): Promise<{ accessToken: string, refreshToken: IRefreshToken, user: Partial<IUser> }> {
@@ -160,10 +186,12 @@ export class AuthService {
             $or: [{ username: loginIdentifier.toLowerCase() }, { email: loginIdentifier.toLowerCase() }]
         });
 
+
+
         if (!user) {
             this.logger.warn(`Login attempt with unknown identifier: ${loginIdentifier} `);
             auditService.logAuthEvent(null, 'LOGIN', 'failure', { loginIdentifier, reason: 'Invalid credentials - user not found' });
-            throw new Error('Invalid credentials');
+            throw new AuthenticationError('Invalid credentials');
         }
 
         const isMatch = await bcrypt.compare(password, user.passwordHash);
@@ -173,7 +201,7 @@ export class AuthService {
             await user.save();
             this.logger.warn(`Failed login attempt for user ${user.username}`);
             auditService.logAuthEvent(user.userId, 'LOGIN', 'failure', { loginIdentifier, reason: 'Invalid credentials - wrong password' });
-            throw new Error('Invalid credentials');
+            throw new AuthenticationError('Invalid credentials');
         }
 
         user.security.failedLoginAttempts = 0;

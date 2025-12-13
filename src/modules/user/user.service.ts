@@ -114,10 +114,31 @@ export class UserService {
         await user.save();
 
         // Invalidate related caches
-        await cacheService.del([
+        // Note: Middleware generates keys as api:{userId}:{routerPath} (e.g., api:123:profile)
+        // We include both legacy/potential formats and the calculated middleware format to be safe.
+        const cacheKeys = [
             `api:${userId}::user:me`,
-            `api:${userId}::user:settings`
-        ]);
+            `api:${userId}::user:settings`,
+            `api:${userId}::user:profile`,
+            `api:${userId}:me`,
+            `api:${userId}:settings`,
+            `api:${userId}:profile`
+        ];
+
+        if (settingsData.preferences) {
+            cacheKeys.push(`api:${userId}::user:preferences`);
+            cacheKeys.push(`api:${userId}:preferences`);
+
+            // Explicitly clear the dedicated preferences cache used by getUserPreferences
+            try {
+                await redisClient.del(`user:${userId}:preferences`);
+                this.logger.debug('Invalidated user preferences cache from settings update', { userId });
+            } catch (error) {
+                this.logger.warn('Failed to invalidate preferences cache', { error });
+            }
+        }
+
+        await cacheService.del(cacheKeys);
 
         this.logger.info(`User settings updated for user: ${userId}`);
         auditService.logEvent('USER_SETTINGS_UPDATE_SERVICE', userId, null, { action: 'updateUserSettings', updatedFields: Object.keys(settingsData) }, 'success');
