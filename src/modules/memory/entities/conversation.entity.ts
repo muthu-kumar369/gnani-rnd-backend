@@ -50,6 +50,8 @@ export interface IConversationMessage extends Document {
         editedFrom?: string;         // Original message ID if edited
         regeneratedAfterEdit?: boolean;
         editedMessageVersion?: number;
+        model?: string;              // Model used for generation
+        template?: string;           // Template ID used
         [key: string]: any;
     };
     attachments?: Array<{

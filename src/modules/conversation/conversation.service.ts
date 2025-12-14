@@ -532,7 +532,7 @@ class ConversationService {
     /**
      * Update conversation template
      */
-    async updateConversationTemplate(conversationId: string, userId: string, templateId: string) {
+    async updateConversationTemplate(conversationId: string, userId: string, templateId: string | null) {
         return Conversation.findOneAndUpdate(
             { conversationId, userId, isDeleted: false },
             { currentTemplate: templateId },
@@ -751,6 +751,11 @@ class ConversationService {
             ? existingGenerations[0].generationIndex + 1
             : 0;
 
+        // Fetch conversation details for tracking
+        const conversationDoc = await Conversation.findOne({ conversationId }).lean();
+        const currentModel = conversationDoc?.currentModel || 'gemma:2b';
+        const currentTemplateId = conversationDoc?.currentTemplate;
+
         // Create new generation record
         const streamId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const generationId = `gen_${parentMessage._id}_${nextGenerationIndex}`;
@@ -774,7 +779,9 @@ class ConversationService {
             parentMessageId: parentMessage._id.toString(),
             parentId: parentMessage._id.toString(),
             metadata: {
-                regeneratedFrom: messageId
+                regeneratedFrom: messageId,
+                model: currentModel,
+                template: currentTemplateId
             }
         });
 
@@ -843,8 +850,20 @@ class ConversationService {
         callbacks?: {
             onChunk?: (text: string, messageId?: string) => void | Promise<void>;
             onComplete?: (text: string, messageId?: string) => void | Promise<void>;
-        }
+        },
+        model?: string,
+        template?: string | null
     ) {
+        // Update model if provided
+        if (model) {
+            await this.updateConversationModel(conversationId, userId, model);
+        }
+
+        // Update template if provided (strictly checking against undefined to allow null/empty for clearing)
+        if (template !== undefined) {
+            await this.updateConversationTemplate(conversationId, userId, template);
+        }
+
         const ephemSessionId = await this._ensureCoordinatorSession(conversationId, userId, callbacks);
 
         // Process via coordinator

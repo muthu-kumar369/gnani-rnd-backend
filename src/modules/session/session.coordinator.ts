@@ -369,18 +369,17 @@ export class SessionCoordinator {
             this.logger.info(`[MODEL-TEMPLATE] Using model: ${currentModel}, template: ${currentTemplateId || 'default'}`);
 
             // If template is specified, fetch its system prompt
-            let templateSystemPrompt = customSystemPrompt;
+            let templateInstructions: string | undefined = undefined;
             if (currentTemplateId) {
                 try {
                     const templateService = await import('../template/template.service.js');
                     const template = await templateService.templateService.findById(currentTemplateId, session.userId);
                     if (template?.systemPrompt) {
-                        templateSystemPrompt = template.systemPrompt;
-                        this.logger.info(`[TEMPLATE] Using template system prompt from: ${template.name}`);
+                        templateInstructions = template.systemPrompt;
+                        this.logger.info(`[TEMPLATE] Using template instructions from: ${template.name}`);
                     }
                 } catch (templateError: any) {
                     this.logger.warn(`Failed to fetch template ${currentTemplateId}: ${templateError.message}`);
-                    // Continue with custom system prompt or default
                 }
             }
 
@@ -475,7 +474,8 @@ export class SessionCoordinator {
                     session.userId,
                     transcript,
                     undefined, // attachments
-                    templateSystemPrompt // Use template's system prompt if available
+                    customSystemPrompt, // Pass conversation-level system prompt (base/override)
+                    templateInstructions // Pass template instructions (additive)
                 );
             }, {
                 context: `Context Building (${sessionId})`,
@@ -486,7 +486,8 @@ export class SessionCoordinator {
             this.logger.info(`[AUDIO-FLOW-14] Context built for session ${sessionId}`, {
                 duration: contextDuration,
                 hasContext: !!context,
-                customPrompt: !!templateSystemPrompt,
+                customPrompt: !!customSystemPrompt,
+                hasTemplateInstructions: !!templateInstructions,
                 usingTemplate: !!currentTemplateId
             });
 
@@ -586,7 +587,11 @@ export class SessionCoordinator {
                             totalTokens: response.tokenUsage.totalTokens,
                             estimatedCost: 0,
                             model: currentModel
-                        } : undefined
+                        } : undefined,
+                        $set: {
+                            'metadata.model': currentModel,
+                            'metadata.template': currentTemplateId
+                        }
                     });
                     finalMessageId = options.targetMessageId;
                 } else {
@@ -619,7 +624,11 @@ export class SessionCoordinator {
                             totalTokens: response.tokenUsage.totalTokens,
                             estimatedCost: 0,
                             model: currentModel
-                        } : undefined
+                        } : undefined,
+                        metadata: {
+                            model: currentModel,
+                            template: currentTemplateId
+                        }
                     });
 
                     // Update User Message children

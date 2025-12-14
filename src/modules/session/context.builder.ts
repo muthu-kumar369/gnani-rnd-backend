@@ -25,8 +25,10 @@ export class ContextBuilder {
         this.logger = createContextualLogger({ module: 'ContextBuilder' });
     }
 
-    async build(sessionId: string, userId: string, transcript: string, attachments?: any[], customSystemPrompt?: string): Promise<Context> {
+    async build(sessionId: string, userId: string, transcript: string, attachments?: any[], systemPromptOverride?: string, templateInstructions?: string): Promise<Context> {
         try {
+            // ... (previous steps 1-4) ...
+
             // 1. Get recent messages from cache
             this.logger.info(`Getting cached messages for session ${sessionId}...`);
             const cachedMessages = await sessionMemory.getCachedMessages(sessionId) || [];
@@ -75,7 +77,9 @@ export class ContextBuilder {
             });
 
             // 5. Build system prompt with intent-specific guidance
-            const systemPrompt = this.buildSystemPrompt(relevantMemories, intent, customSystemPrompt);
+            const systemPrompt = this.buildSystemPrompt(relevantMemories, intent, systemPromptOverride, templateInstructions);
+
+            // ... (rest of the method) ...
 
             // 6. Get cross-conversation context (NEW)
             let crossConversationContext = '';
@@ -141,12 +145,20 @@ export class ContextBuilder {
         }
     }
 
-    private buildSystemPrompt(memories: string[], intent: IntentClassification, customPrompt?: string): string {
-        // Base prompt
+    private buildSystemPrompt(memories: string[], intent: IntentClassification, customPrompt?: string, templateInstructions?: string): string {
+        // Base prompt (Identity)
+        // If customPrompt is strictly provided, it overrides the default identity.
+        // But Template Instructions are ADDITIVE.
         const basePrompt = customPrompt || 'You are Gnani, a helpful AI assistant.';
 
-        // Get intent-specific prompt
+        // Get intent-specific prompt which typically wraps the base prompt
         let prompt = promptSelector.getSystemPrompt(intent.intent, basePrompt);
+
+        // ADDITIVE TEMPLATE
+        if (templateInstructions) {
+            prompt += '\n\n--- TEMPLATE INSTRUCTIONS ---\n' + templateInstructions + '\n-----------------------------\n';
+        }
+
         prompt += '\n\n';
 
         if (memories.length > 0) {

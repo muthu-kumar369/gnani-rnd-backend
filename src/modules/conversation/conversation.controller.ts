@@ -287,7 +287,7 @@ class ConversationController {
             if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
             const { id } = req.params;
-            const { content } = req.body;
+            const { content, model, template } = req.body;
 
             if (!content) return res.status(400).json({ error: 'Content is required' });
 
@@ -316,7 +316,7 @@ class ConversationController {
                         };
                         res.write(JSON.stringify(complete) + '\n');
                     }
-                });
+                }, model, template);
 
                 res.end();
             } catch (serviceError: any) {
