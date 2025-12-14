@@ -3,7 +3,9 @@ import { Application } from 'express';
 
 export const configureSecurityMiddleware = (app: Application) => {
     // Use Helmet to set secure HTTP headers
-    app.use(helmet());
+    app.use(helmet({
+        crossOriginResourcePolicy: { policy: "cross-origin" }
+    }));
 
     // Custom CSP configuration if needed (example)
     // app.use(

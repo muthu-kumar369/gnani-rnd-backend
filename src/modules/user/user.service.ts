@@ -1,5 +1,5 @@
 // src/services/userService.ts
-import User, { IUser, IDevice } from './user.entity.js';
+import User, { IUser } from './user.entity.js';
 import { createContextualLogger } from '../../core/logger/logger.js';
 import auditService from '../../core/logger/audit.service.js';
 import cacheService from '../../core/cache/cache.service.js';
@@ -45,19 +45,22 @@ export class UserService {
             throw new Error('User not found');
         }
 
-        if (profileData.firstName) user.profile.firstName = profileData.firstName;
-        if (profileData.lastName) user.profile.lastName = profileData.lastName;
-        if (profileData.dob) user.profile.dob = profileData.dob;
-        if (profileData.locale) user.profile.locale = profileData.locale;
-        if (profileData.language) user.profile.language = profileData.language;
-        if (profileData.profilePhoto) user.profile.profilePhoto = profileData.profilePhoto;
+        if (profileData.firstName !== undefined) user.profile.firstName = profileData.firstName;
+        if (profileData.lastName !== undefined) user.profile.lastName = profileData.lastName;
+        if (profileData.dob !== undefined) user.profile.dob = profileData.dob;
+        if (profileData.locale !== undefined) user.profile.locale = profileData.locale;
+        if (profileData.language !== undefined) user.profile.language = profileData.language;
+        if (profileData.profilePhoto !== undefined) user.profile.profilePhoto = profileData.profilePhoto;
+        if (profileData.uploadedProfilePhotoId !== undefined) user.profile.uploadedProfilePhotoId = profileData.uploadedProfilePhotoId;
 
         await user.save();
 
         // Invalidate related caches
         await cacheService.del([
             `api:${userId}::user:me`,
-            `api:${userId}::user:profile`
+            `api:${userId}::user:profile`,
+            `api:${userId}:me`,
+            `api:${userId}:profile`
         ]);
 
         this.logger.info(`User profile updated for user: ${userId}`);
@@ -215,80 +218,7 @@ export class UserService {
         return user.preferences;
     }
 
-    async getUserDevices(userId: string): Promise<IDevice[]> {
-        const user = await User.findOne({ userId });
-        if (!user) {
-            this.logger.warn(`User ${userId} not found when retrieving devices.`);
-            auditService.logEvent('USER_DEVICES_RETRIEVAL_SERVICE', userId, null, { action: 'getUserDevices', reason: 'User not found' }, 'failure');
-            throw new Error('User not found');
-        }
-        this.logger.info(`User devices retrieved for user: ${userId}`);
-        auditService.logEvent('USER_DEVICES_RETRIEVAL_SERVICE', userId, null, { action: 'getUserDevices' }, 'success');
-        return user.devices;
-    }
 
-    async addDevice(userId: string, deviceData: IDevice): Promise<IDevice[]> {
-        const user = await User.findOne({ userId });
-        if (!user) {
-            this.logger.warn(`User ${userId} not found when adding device.`);
-            auditService.logEvent('USER_DEVICE_ADD_SERVICE', userId, null, { action: 'addDevice', reason: 'User not found' }, 'failure');
-            throw new Error('User not found');
-        }
-        user.devices.push(deviceData);
-        await user.save();
-
-        // Invalidate devices cache
-        await cacheService.del(`api:${userId}::user:devices`);
-
-        this.logger.info(`Device added for user: ${userId}`);
-        auditService.logEvent('USER_DEVICE_ADD_SERVICE', userId, null, { action: 'addDevice', deviceName: deviceData.deviceName }, 'success');
-        return user.devices;
-    }
-
-    async updateDevice(userId: string, deviceId: string, updateData: Partial<IDevice>): Promise<IDevice[]> {
-        const user = await User.findOne({ userId });
-        if (!user) {
-            this.logger.warn(`User ${userId} not found when updating device.`);
-            auditService.logEvent('USER_DEVICE_UPDATE_SERVICE', userId, null, { action: 'updateDevice', deviceId, reason: 'User not found' }, 'failure');
-            throw new Error('User not found');
-        }
-
-        const deviceIndex = user.devices.findIndex((d: IDevice) => d.deviceId === deviceId);
-        if (deviceIndex === -1) {
-            this.logger.warn(`Device ${deviceId} not found for user ${userId} during update.`);
-            auditService.logEvent('USER_DEVICE_UPDATE_SERVICE', userId, null, { action: 'updateDevice', deviceId, reason: 'Device not found' }, 'failure');
-            throw new Error('User not found');
-        }
-
-        user.devices[deviceIndex] = { ...(user.devices[deviceIndex].toObject()), ...updateData };
-        await user.save();
-
-        // Invalidate devices cache
-        await cacheService.del(`api:${userId}::user:devices`);
-
-        this.logger.info(`Device ${deviceId} updated for user: ${userId}`);
-        auditService.logEvent('USER_DEVICE_UPDATE_SERVICE', userId, null, { action: 'updateDevice', deviceId, updatedFields: Object.keys(updateData) }, 'success');
-        return user.devices;
-    }
-
-    async removeDevice(userId: string, deviceId: string): Promise<IDevice[]> {
-        const user = await User.findOne({ userId });
-        if (!user) {
-            this.logger.warn(`User ${userId} not found when removing device.`);
-            auditService.logEvent('USER_DEVICE_REMOVE_SERVICE', userId, null, { action: 'removeDevice', deviceId, reason: 'User not found' }, 'failure');
-            throw new Error('User not found');
-        }
-
-        user.devices = user.devices.filter((d: IDevice) => d.deviceId !== deviceId);
-        await user.save();
-
-        // Invalidate devices cache
-        await cacheService.del(`api:${userId}::user:devices`);
-
-        this.logger.info(`Device ${deviceId} removed for user: ${userId}`);
-        auditService.logEvent('USER_DEVICE_REMOVE_SERVICE', userId, null, { action: 'removeDevice', deviceId }, 'success');
-        return user.devices;
-    }
 
     async getUserSecurity(userId: string): Promise<any> {
         const user = await User.findOne({ userId }).select('security');
@@ -354,54 +284,7 @@ export class UserService {
         return user.oauthProviders;
     }
 
-    async getUserHistory(userId: string): Promise<any[]> {
-        const user = await User.findOne({ userId }).select('history');
-        if (!user) {
-            this.logger.warn(`User ${userId} not found when retrieving history.`);
-            auditService.logEvent('USER_HISTORY_RETRIEVAL_SERVICE', userId, null, { action: 'getUserHistory', reason: 'User not found' }, 'failure');
-            throw new Error('User not found');
-        }
-        this.logger.info(`User history retrieved for user: ${userId}`);
-        auditService.logEvent('USER_HISTORY_RETRIEVAL_SERVICE', userId, null, { action: 'getUserHistory' }, 'success');
-        return user.history;
-    }
 
-    async deleteUserHistoryItem(userId: string, historyId: string): Promise<any[]> {
-        const user = await User.findOne({ userId });
-        if (!user) {
-            this.logger.warn(`User ${userId} not found when deleting history item.`);
-            auditService.logEvent('USER_HISTORY_DELETE_ITEM_SERVICE', userId, null, { action: 'deleteUserHistoryItem', historyId, reason: 'User not found' }, 'failure');
-            throw new Error('User not found');
-        }
-
-        user.history = user.history.filter((h: any) => h._id.toString() !== historyId);
-        await user.save();
-
-        // Invalidate history cache
-        await cacheService.del(`api:${userId}::user:history`);
-
-        this.logger.info(`History item ${historyId} deleted for user: ${userId}`);
-        auditService.logEvent('USER_HISTORY_DELETE_ITEM_SERVICE', userId, null, { action: 'deleteUserHistoryItem', historyId }, 'success');
-        return user.history;
-    }
-
-    async clearUserHistory(userId: string): Promise<void> {
-        const user = await User.findOne({ userId });
-        if (!user) {
-            this.logger.warn(`User ${userId} not found when clearing history.`);
-            auditService.logEvent('USER_HISTORY_CLEAR_SERVICE', userId, null, { action: 'clearUserHistory', reason: 'User not found' }, 'failure');
-            throw new Error('User not found');
-        }
-
-        user.history = [];
-        await user.save();
-
-        // Invalidate history cache
-        await cacheService.del(`api:${userId}::user:history`);
-
-        this.logger.info(`History cleared for user: ${userId}`);
-        auditService.logEvent('USER_HISTORY_CLEAR_SERVICE', userId, null, { action: 'clearUserHistory' }, 'success');
-    }
 
     async getUserNotes(userId: string): Promise<string[]> {
         const user = await User.findOne({ userId }).select('notes');

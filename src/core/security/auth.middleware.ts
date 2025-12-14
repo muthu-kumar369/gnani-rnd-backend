@@ -17,11 +17,16 @@ export interface CustomRequest extends Request {
 }
 
 export const authMiddleware = async (req: CustomRequest, res: Response, next: NextFunction): Promise<void | Response> => {
-    // Get token from header
-    const token = req.header('x-auth-token');
+    // Get token from header or query param
+    const token = req.header('x-auth-token') || req.query.token as string;
 
     // Check if no token
     if (!token) {
+        logger.debug('Auth middleware: No token found in header or query', {
+            path: req.path,
+            query: req.query,
+            headers: req.headers
+        });
         return res.status(401).json({ message: 'No token, authorization denied' });
     }
 
@@ -33,11 +38,12 @@ export const authMiddleware = async (req: CustomRequest, res: Response, next: Ne
         // Optionally, fetch full user object from DB and attach
         req.fullUser = await User.findOne({ userId: req.user.id }).select('-passwordHash');
         if (!req.fullUser) {
+            logger.warn(`Auth middleware: User not found for ID ${req.user.id}`);
             return res.status(401).json({ message: 'User not found, authorization denied' });
         }
         next();
     } catch (err: any) {
-        logger.error(`Auth middleware error: ${err.message}`);
+        logger.error(`Auth middleware error: ${err.message}`, { token: token.substring(0, 20) + '...' });
         res.status(401).json({ message: `Token is not valid: ${err.message}` });
     }
 };

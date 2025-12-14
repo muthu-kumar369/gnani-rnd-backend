@@ -684,13 +684,14 @@ class ConversationService {
     /**
      * Create a new conversation explicitly
      */
-    async createConversation(userId: string, systemPrompt?: string) {
+    async createConversation(userId: string, systemPrompt?: string, model?: string) {
         const conversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const conversation = await Conversation.create({
             userId,
             conversationId,
             title: 'New Conversation',
             systemPrompt: systemPrompt || "You are Gnani, a helpful AI assistant.",
+            currentModel: model, // Will use default from schema if undefined
             createdAt: new Date(),
             updatedAt: new Date()
         });

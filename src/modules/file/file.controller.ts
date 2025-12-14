@@ -2,6 +2,7 @@
 import { Request, Response } from 'express';
 import fileService from './file.service.js';
 import { createContextualLogger } from '../../core/logger/logger.js';
+import { CustomRequest } from '../../core/security/auth.middleware.js';
 
 const logger = createContextualLogger({ module: 'FileController' });
 
@@ -10,14 +11,14 @@ class FileController {
      * Upload file
      * POST /api/files/upload
      */
-    async uploadFile(req: Request, res: Response): Promise<void> {
+    async uploadFile(req: CustomRequest, res: Response): Promise<void> {
         try {
             if (!req.file) {
                 res.status(400).json({ error: 'No file provided' });
                 return;
             }
 
-            const userId = (req as any).user?.userId || req.body.userId;
+            const userId = req.fullUser?.userId || req.body.userId;
             if (!userId) {
                 res.status(401).json({ error: 'Unauthorized' });
                 return;
@@ -34,7 +35,8 @@ class FileController {
                     mimeType: file.mimeType,
                     storageMode: file.storageMode,
                     parsedContentPreview: file.parsedContent.substring(0, 200),
-                    uploadedAt: file.uploadedAt
+                    uploadedAt: file.uploadedAt,
+                    url: `/api/v1/files/${file._id}/download`
                 }
             });
         } catch (error: any) {
@@ -47,10 +49,10 @@ class FileController {
      * Get file metadata
      * GET /api/files/:fileId
      */
-    async getFile(req: Request, res: Response): Promise<void> {
+    async getFile(req: CustomRequest, res: Response): Promise<void> {
         try {
             const { fileId } = req.params;
-            const userId = (req as any).user?.userId || req.query.userId as string;
+            const userId = req.fullUser?.userId || req.query.userId as string;
 
             const file = await fileService.getFile(fileId, userId);
             if (!file) {
@@ -79,10 +81,10 @@ class FileController {
      * Download file
      * GET /api/files/:fileId/download
      */
-    async downloadFile(req: Request, res: Response): Promise<void> {
+    async downloadFile(req: CustomRequest, res: Response): Promise<void> {
         try {
             const { fileId } = req.params;
-            const userId = (req as any).user?.userId || req.query.userId as string;
+            const userId = req.fullUser?.userId || req.query.userId as string;
 
             const { buffer, file } = await fileService.getFileBuffer(fileId, userId);
 
@@ -99,10 +101,10 @@ class FileController {
      * Delete file
      * DELETE /api/files/:fileId
      */
-    async deleteFile(req: Request, res: Response): Promise<void> {
+    async deleteFile(req: CustomRequest, res: Response): Promise<void> {
         try {
             const { fileId } = req.params;
-            const userId = (req as any).user?.userId || req.body.userId;
+            const userId = req.fullUser?.userId || req.body.userId;
 
             await fileService.deleteFile(fileId, userId);
 
@@ -117,9 +119,9 @@ class FileController {
      * Get user's files
      * GET /api/files
      */
-    async getUserFiles(req: Request, res: Response): Promise<void> {
+    async getUserFiles(req: CustomRequest, res: Response): Promise<void> {
         try {
-            const userId = (req as any).user?.userId || req.query.userId as string;
+            const userId = req.fullUser?.userId || req.query.userId as string;
             const limit = parseInt(req.query.limit as string) || 20;
 
             const files = await fileService.getUserFiles(userId, limit);

@@ -237,7 +237,8 @@ class LlmService {
                     let firstTokenReceived = false;
 
                     const options = {
-                        model: this.getModelPath(preferredModel),
+                        model: 'gemma:2b', // STAGE 11: Hardcoded as per user request for dev environment
+                        // model: this.getModelPath(preferredModel),
                         maxTokens: config.LLM_MAX_TOKENS,
                         temperature: config.LLM_TEMPERATURE,
                         stream: true, // Always stream

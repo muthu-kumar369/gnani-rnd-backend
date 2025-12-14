@@ -6,6 +6,7 @@ export const FILE_SIZE_LIMITS = {
     image: 10 * 1024 * 1024, // 10MB
     document: 50 * 1024 * 1024, // 50MB
     audio: 100 * 1024 * 1024, // 100MB
+    mixed: 50 * 1024 * 1024, // 50MB (max of doc)
     default: 10 * 1024 * 1024, // 10MB
 };
 
@@ -19,6 +20,14 @@ export const ALLOWED_MIME_TYPES = {
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     ],
     audio: ['audio/wav', 'audio/mpeg', 'audio/mp3', 'audio/ogg'],
+    mixed: [
+        'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/jpg',
+        'application/pdf',
+        'text/plain',
+        'text/markdown',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ]
 };
 
 // Use memory storage to support both S3 and local

@@ -28,6 +28,9 @@ const app: Application = express();
 // Security Middleware (Helmet)
 configureSecurityMiddleware(app);
 
+// CORS must be first to handle preflight headers correctly
+app.use(corsMiddleware);
+
 // Stage 5: Request ID middleware for request correlation
 app.use(requestIdMiddleware);
 
@@ -52,7 +55,7 @@ app.use(compression({
 app.use(globalRateLimiter); // Apply global rate limiting first
 app.use('/api/v1/auth', strictRateLimiter); // Apply stricter limit to auth routes
 // app.use('/api', apiLimiter); // Removed redundant apiLimiter, global covers it or use specific if needed
-app.use(corsMiddleware);
+// app.use(corsMiddleware); // Moved to top
 app.use(bodyParser.json());
 app.use(morgan('combined', { stream: { write: (message: string) => logger.info(message.trim()) } })); // Log HTTP requests
 

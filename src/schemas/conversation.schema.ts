@@ -4,6 +4,7 @@ export const createConversationSchema = z.object({
     body: z.object({
         message: z.string().optional(), // Initial message is optional
         systemPrompt: z.string().optional(),
+        model: z.string().optional(), // STAGE 11: Support initial model selection
     }),
 });
 
@@ -22,6 +23,7 @@ export const updateSystemPromptSchema = z.object({
     }),
     body: z.object({
         systemPrompt: z.string(),
+        model: z.string().optional(), // Added model field
     }),
 });
 
@@ -43,3 +45,4 @@ export const searchConversationSchema = z.object({
         filters: z.any().optional(),
     }),
 });
+

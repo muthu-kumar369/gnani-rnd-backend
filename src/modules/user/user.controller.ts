@@ -137,73 +137,7 @@ class UserController {
         }
     }
 
-    async getDevices(req: CustomRequest, res: Response, next: NextFunction): Promise<void> {
-        const userId = req.fullUser?.userId;
-        try {
-            if (!userId) {
-                throw new Error('User ID not found in request');
-            }
-            const devices = await this.userServiceInstance.getUserDevices(userId);
-            auditService.logEvent('USER_DEVICES_RETRIEVAL', userId, null, { action: 'getDevices' }, 'success');
-            res.status(200).json(devices);
-        } catch (error: any) {
-            this.logger.error(`Get devices error for user ${userId}: ${error.message}`);
-            auditService.logEvent('USER_DEVICES_RETRIEVAL', userId || null, null, { action: 'getDevices', error: error.message }, 'failure');
-            next(error);
-        }
-    }
 
-    async addDevice(req: CustomRequest, res: Response, next: NextFunction): Promise<void> {
-        const userId = req.fullUser?.userId;
-        const newDevice = req.body;
-        try {
-            if (!userId) {
-                throw new Error('User ID not found in request');
-            }
-            const devices = await this.userServiceInstance.addDevice(userId, newDevice);
-            auditService.logEvent('USER_DEVICE_ADD', userId, null, { action: 'addDevice', device: newDevice }, 'success');
-            res.status(201).json({ message: 'Device added successfully', devices });
-        } catch (error: any) {
-            this.logger.error(`Add device error for user ${userId}: ${error.message}`);
-            auditService.logEvent('USER_DEVICE_ADD', userId || null, null, { action: 'addDevice', device: newDevice, error: error.message }, 'failure');
-            next(error);
-        }
-    }
-
-    async updateDevice(req: CustomRequest, res: Response, next: NextFunction): Promise<void> {
-        const userId = req.fullUser?.userId;
-        const { deviceId } = req.params;
-        const updateData = req.body;
-        try {
-            if (!userId) {
-                throw new Error('User ID not found in request');
-            }
-            const devices = await this.userServiceInstance.updateDevice(userId, deviceId, updateData);
-            auditService.logEvent('USER_DEVICE_UPDATE', userId, null, { action: 'updateDevice', deviceId, updateData }, 'success');
-            res.status(200).json({ message: 'Device updated successfully', devices });
-        } catch (error: any) {
-            this.logger.error(`Update device error for user ${userId}, device ${deviceId}: ${error.message}`);
-            auditService.logEvent('USER_DEVICE_UPDATE', userId || null, null, { action: 'updateDevice', deviceId, updateData, error: error.message }, 'failure');
-            next(error);
-        }
-    }
-
-    async removeDevice(req: CustomRequest, res: Response, next: NextFunction): Promise<void> {
-        const userId = req.fullUser?.userId;
-        const { deviceId } = req.params;
-        try {
-            if (!userId) {
-                throw new Error('User ID not found in request');
-            }
-            const devices = await this.userServiceInstance.removeDevice(userId, deviceId);
-            auditService.logEvent('USER_DEVICE_REMOVE', userId, null, { action: 'removeDevice', deviceId }, 'success');
-            res.status(200).json({ message: 'Device removed successfully', devices });
-        } catch (error: any) {
-            this.logger.error(`Remove device error for user ${userId}, device ${deviceId}: ${error.message}`);
-            auditService.logEvent('USER_DEVICE_REMOVE', userId || null, null, { action: 'removeDevice', deviceId, error: error.message }, 'failure');
-            next(error);
-        }
-    }
 
     async getSecurity(req: CustomRequest, res: Response, next: NextFunction): Promise<void> {
         const userId = req.fullUser?.userId;
@@ -271,54 +205,7 @@ class UserController {
         }
     }
 
-    async getHistory(req: CustomRequest, res: Response, next: NextFunction): Promise<void> {
-        const userId = req.fullUser?.userId;
-        try {
-            if (!userId) {
-                throw new Error('User ID not found in request');
-            }
-            const history = await this.userServiceInstance.getUserHistory(userId);
-            auditService.logEvent('USER_HISTORY_RETRIEVAL', userId, null, { action: 'getHistory' }, 'success');
-            res.status(200).json(history);
-        } catch (error: any) {
-            this.logger.error(`Get history error for user ${userId}: ${error.message}`);
-            auditService.logEvent('USER_HISTORY_RETRIEVAL', userId || null, null, { action: 'getHistory', error: error.message }, 'failure');
-            next(error);
-        }
-    }
 
-    async deleteHistoryItem(req: CustomRequest, res: Response, next: NextFunction): Promise<void> {
-        const userId = req.fullUser?.userId;
-        const { id } = req.params;
-        try {
-            if (!userId) {
-                throw new Error('User ID not found in request');
-            }
-            const history = await this.userServiceInstance.deleteUserHistoryItem(userId, id);
-            auditService.logEvent('USER_HISTORY_DELETE_ITEM', userId, null, { action: 'deleteHistoryItem', historyId: id }, 'success');
-            res.status(200).json({ message: 'History item deleted successfully', history });
-        } catch (error: any) {
-            this.logger.error(`Delete history item error for user ${userId}, item ${id}: ${error.message}`);
-            auditService.logEvent('USER_HISTORY_DELETE_ITEM', userId || null, null, { action: 'deleteHistoryItem', historyId: id, error: error.message }, 'failure');
-            next(error);
-        }
-    }
-
-    async clearHistory(req: CustomRequest, res: Response, next: NextFunction): Promise<void> {
-        const userId = req.fullUser?.userId;
-        try {
-            if (!userId) {
-                throw new Error('User ID not found in request');
-            }
-            await this.userServiceInstance.clearUserHistory(userId);
-            auditService.logEvent('USER_HISTORY_CLEAR', userId, null, { action: 'clearHistory' }, 'success');
-            res.status(200).json({ message: 'History cleared successfully' });
-        } catch (error: any) {
-            this.logger.error(`Clear history error for user ${userId}: ${error.message}`);
-            auditService.logEvent('USER_HISTORY_CLEAR', userId || null, null, { action: 'clearHistory', error: error.message }, 'failure');
-            next(error);
-        }
-    }
 
     async getNotes(req: CustomRequest, res: Response, next: NextFunction): Promise<void> {
         const userId = req.fullUser?.userId;
@@ -366,6 +253,19 @@ class UserController {
         } catch (error: any) {
             this.logger.error(`Delete note error for user ${userId}, index ${index}: ${error.message}`);
             auditService.logEvent('USER_NOTE_DELETE', userId || null, null, { action: 'deleteNote', index, error: error.message }, 'failure');
+            next(error);
+        }
+    }
+
+    async getVoices(req: CustomRequest, res: Response, next: NextFunction): Promise<void> {
+        try {
+            // Voices are currently static/system based, but served from backend for consistency
+            // In future this could fetch from ElevenLabs/AWS/Azure etc.
+            const ttsService = await import('../tts/tts.service.js');
+            const voices = await ttsService.default.getAvailableVoices();
+            res.status(200).json({ voices });
+        } catch (error: any) {
+            this.logger.error(`Get voices error: ${error.message}`);
             next(error);
         }
     }

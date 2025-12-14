@@ -2,7 +2,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { FILE_SIZE_LIMITS, ALLOWED_MIME_TYPES } from '../config/multer.config.js';
 
-export const validateFileUpload = (fileType: 'image' | 'document' | 'audio' = 'document') => {
+export const validateFileUpload = (fileType: 'image' | 'document' | 'audio' | 'mixed' = 'document') => {
     return (req: Request, res: Response, next: NextFunction) => {
         if (!req.file && !req.files) {
             return res.status(400).json({ error: 'No file uploaded' });

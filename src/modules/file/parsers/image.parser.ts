@@ -30,8 +30,8 @@ export async function optimizeImage(buffer: Buffer): Promise<Buffer> {
         logger.debug(`Image optimized: ${buffer.length} -> ${optimized.length} bytes`);
         return optimized;
     } catch (error: any) {
-        logger.error(`Image optimization failed: ${error.message}`);
-        throw new Error(`Failed to optimize image: ${error.message}`);
+        logger.warn(`Image optimization failed, using original: ${error.message}`);
+        return buffer; // Fallback to original buffer
     }
 }
 

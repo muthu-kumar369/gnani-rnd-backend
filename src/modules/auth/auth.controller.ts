@@ -3,6 +3,7 @@ import { AuthService } from './auth.service.js';
 import { OAuthService } from './oauth.service.js';
 import { createContextualLogger } from '../../core/logger/logger.js';
 import auditService from '../../core/logger/audit.service.js';
+import { CustomRequest } from '../../core/security/auth.middleware.js';
 
 const logger = createContextualLogger({ module: 'AuthController' });
 const authService = new AuthService();
@@ -75,16 +76,31 @@ export default {
 
     async startOAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
         const { provider } = req.params;
-        const { redirectUri, usePKCE } = req.query;
+        const { redirectUri, usePKCE, token } = req.query; // Accept token for linking
+
+        let userId: string | undefined;
 
         try {
+            // If a token is provided, verify it to identify the user for linking
+            if (token && typeof token === 'string') {
+                try {
+                    // Manually verify since this route is public but can be "upgraded"
+                    const decoded = await authService.verifyToken(token); // Need to expose verifyToken or use jwt directly
+                    userId = decoded.user.id;
+                } catch (err) {
+                    logger.warn(`Invalid token provided for OAuth linking: ${token}`);
+                    // We don't block, just fallback to normal login (or could throw if strict)
+                }
+            }
+
             const result = oauthService.generateAuthUrl(
                 provider,
                 redirectUri as string | undefined,
-                usePKCE === 'true'
+                usePKCE === 'true',
+                userId // Pass userId to session
             );
 
-            auditService.logAuthEvent(null, 'OAUTH_START', 'success', { provider });
+            auditService.logAuthEvent(userId || null, 'OAUTH_START', 'success', { provider, isLinking: !!userId });
             res.status(200).json(result);
         } catch (error: any) {
             logger.error(`OAuth start error for provider ${provider}: ${error.message}`);
@@ -172,6 +188,22 @@ export default {
             logger.error(`Logout error: ${error.message}`);
             // Even if backend logout fails, we return success so frontend can clear tokens
             res.status(200).json({ message: 'Logged out successfully' });
+        }
+    },
+
+    async terminateSessions(req: CustomRequest, res: Response, next: NextFunction): Promise<void> {
+        const userId = req.fullUser?.userId || req.query.userId
+        try {
+            if (!userId) {
+                throw new Error('User not authenticated');
+            }
+            await authService.revokeAllRefreshTokens(userId);
+            auditService.logAuthEvent(userId, 'TERMINATE_SESSIONS', 'success');
+            res.status(200).json({ message: 'All other sessions terminated successfully' });
+        } catch (error: any) {
+            logger.error(`Terminate sessions error for user ${userId}: ${error.message}`);
+            auditService.logAuthEvent(userId || null, 'TERMINATE_SESSIONS', 'failure', { error: error.message });
+            next(error);
         }
     }
 };

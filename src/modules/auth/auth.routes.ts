@@ -14,6 +14,7 @@ router.post('/register', authLimiter, validate(registerSchema), authController.r
 router.post('/login', authLimiter, validate(loginSchema), authController.login);
 router.post('/refresh-token', authLimiter, validate(refreshTokenSchema), authController.refreshToken);
 router.post('/logout', authMiddleware, authController.logout);
+router.post('/terminate-sessions', authMiddleware, authController.terminateSessions);
 
 // OAuth Routes
 router.post('/oauth', authLimiter, authController.oauth); // Backward compatibility

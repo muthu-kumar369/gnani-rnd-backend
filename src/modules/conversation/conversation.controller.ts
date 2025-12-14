@@ -34,8 +34,8 @@ class ConversationController {
             const userId = req.user?.id;
             if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
-            const { systemPrompt } = req.body;
-            const conversation = await conversationService.createConversation(userId, systemPrompt);
+            const { systemPrompt, model } = req.body;
+            const conversation = await conversationService.createConversation(userId, systemPrompt, model);
             res.status(201).json(conversation);
         } catch (error) {
             console.error('Error creating conversation:', error);

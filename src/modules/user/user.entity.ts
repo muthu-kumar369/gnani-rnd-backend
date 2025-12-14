@@ -13,18 +13,7 @@ export interface ISettings extends Document {
     preferredModel: string;
 }
 
-export interface IDevice extends Document {
-    deviceId: string;
-    deviceName: string;
-    deviceType: string;
-    lastActive: Date;
-}
 
-export interface IHistoryItem extends Document {
-    query: string;
-    response: string;
-    timestamp: Date;
-}
 
 export interface IProfile extends Document {
     firstName?: string;
@@ -33,6 +22,7 @@ export interface IProfile extends Document {
     locale: string;
     language: string;
     profilePhoto?: string;
+    uploadedProfilePhotoId?: string;
 }
 
 export interface ISecurity extends Document {
@@ -48,16 +38,7 @@ export interface IOAuthProvider extends Document {
     linkedAt: Date;
 }
 
-export interface IRefreshToken extends Document {
-    token: string;
-    expiresAt: Date;
-    issuedAt: Date;
-    revoked: boolean;
-    replacedByToken?: string;
-    // Potentially add a device identifier or IP address for more granular control
-    deviceId?: string;
-    userAgent?: string;
-}
+// IRefreshToken interface removed - check modules/auth/refresh-token.entity.ts
 
 // Main User Interface
 export interface IUser extends Document {
@@ -68,8 +49,7 @@ export interface IUser extends Document {
     roles: string[];
     permissions: string[];
     settings: ISettings;
-    devices: IDevice[];
-    history: IHistoryItem[];
+
     profile: IProfile;
     preferences: any;
     createdAt: Date;
@@ -81,7 +61,7 @@ export interface IUser extends Document {
     metadata: any;
     isOnboarded: boolean;
     oauthProviders: IOAuthProvider[];
-    refreshTokens: IRefreshToken[];
+    // refreshTokens: IRefreshToken[]; // Moved to separate collection
 }
 
 // Embedded Schemas
@@ -94,20 +74,10 @@ const settingsSchema: Schema = new Schema({
     avatarEnabled: { type: Boolean, default: true },
     avatarGender: { type: String, default: 'female' },
     preferredModel: { type: String, default: 'llama3' },
+    showTimestamps: { type: Boolean, default: true },
 }, { _id: false });
 
-const deviceSchema: Schema = new Schema({
-    deviceId: { type: String, default: uuidv4 },
-    deviceName: { type: String, required: true },
-    deviceType: { type: String, required: true }, // e.g., 'mobile', 'desktop', 'web', 'speaker'
-    lastActive: { type: Date, default: Date.now },
-}, { _id: false });
 
-const historyItemSchema: Schema = new Schema({
-    query: { type: String, required: true },
-    response: { type: String, required: true },
-    timestamp: { type: Date, default: Date.now },
-}, { _id: false });
 
 const profileSchema: Schema = new Schema({
     firstName: String,
@@ -116,6 +86,7 @@ const profileSchema: Schema = new Schema({
     locale: { type: String, default: 'en-US' },
     language: { type: String, default: 'en' },
     profilePhoto: String,
+    uploadedProfilePhotoId: String,
 }, { _id: false });
 
 const securitySchema: Schema = new Schema({
@@ -137,15 +108,7 @@ const oauthProviderSchema: Schema = new Schema({
     linkedAt: { type: Date, default: Date.now },
 }, { _id: false });
 
-const refreshTokenSchema: Schema = new Schema({
-    token: { type: String, required: true },
-    expiresAt: { type: Date, required: true },
-    issuedAt: { type: Date, default: Date.now },
-    revoked: { type: Boolean, default: false },
-    replacedByToken: { type: String },
-    deviceId: { type: String },
-    userAgent: { type: String },
-}, { _id: false });
+// refreshTokenSchema removed
 
 const userSchema = new Schema({
     userId: { type: String, default: uuidv4, unique: true, required: true, index: true }, // Added index
@@ -174,8 +137,6 @@ const userSchema = new Schema({
     roles: [{ type: String, enum: ['owner', 'admin', 'user', 'guest'], default: ['user'] }],
     permissions: [{ type: String }], // List of allowed system actions
     settings: { type: settingsSchema, default: {} },
-    devices: { type: [deviceSchema], default: [] },
-    history: [historyItemSchema],
     profile: { type: profileSchema, default: {} },
     preferences: { type: Schema.Types.Mixed, default: {} }, // Flexible JSON
     createdAt: { type: Date, default: Date.now },
@@ -187,7 +148,7 @@ const userSchema = new Schema({
     metadata: { type: Schema.Types.Mixed, default: {} }, // Flexible JSON for future extensions
     isOnboarded: { type: Boolean, default: false },
     oauthProviders: { type: [oauthProviderSchema], default: [] },
-    refreshTokens: { type: [refreshTokenSchema], default: [] },
+    // refreshTokens: { type: [refreshTokenSchema], default: [] },
 }, { timestamps: true }); // Mongoose handles createdAt and updatedAt automatically
 
 // Ensure `updatedAt` is updated on save
