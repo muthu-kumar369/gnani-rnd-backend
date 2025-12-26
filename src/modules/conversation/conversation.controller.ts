@@ -418,7 +418,7 @@ class ConversationController {
             const { id } = req.params;
             const { templateId } = req.body;
 
-            if (!templateId) {
+            if (templateId === undefined) {
                 return res.status(400).json({ error: 'templateId is required' });
             }
 
